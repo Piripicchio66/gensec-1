@@ -1,0 +1,50 @@
+GenSec — Generic Section Calculator
+Copyright (c) 2026 Andrea Albero
+
+Original software by Andrea Albero
+Website: https://alberoandrea.com
+
+================================================================================
+                              ATTRIBUTION NOTICE
+================================================================================
+
+This software is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0), with an additional commercial licensing option available from the
+Author.
+
+Any use, redistribution, or derivative work MUST retain this NOTICE file in
+its entirety.  In particular:
+
+  1. The name "Andrea Albero" and the project name "GenSec" must appear in
+     any redistributed copy, derivative work, academic publication,
+     professional report, or presentation that relies on this software.
+
+  2. If GenSec results are used in engineering documents, the following
+     citation line (or equivalent) must be included:
+
+         "Cross-section analysis performed with GenSec
+          (https://alberoandrea.com) by Andrea Albero."
+
+  3. All authorship headers in source files must be preserved.
+
+================================================================================
+                               CONTRIBUTORS
+================================================================================
+
+The following individuals have contributed to GenSec.  Each contribution is
+governed by the Contributor License Agreement (CLA.md) and is subject to the
+AGPL-3.0 license terms.
+
+Lead Author
+-----------
+  Andrea Albero <https://alberoandrea.com>
+    — Original design, architecture, and implementation.
+
+Contributors
+------------
+  (No external contributors yet.)
+
+  Format for future entries:
+    Full Name <optional-url-or-email>
+      — Brief description of contribution (module, feature, fix).
+      — Date or version range.

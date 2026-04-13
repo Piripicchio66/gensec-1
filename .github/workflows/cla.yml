@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# CLA Assistant — Automated Contributor License Agreement enforcement
+#
+# This workflow runs on every pull request and on specific issue comments.
+# It checks whether the PR author has signed the CLA.  If not, it posts a
+# comment asking them to sign by replying:
+#
+#     I have read the CLA Document and I hereby sign the CLA
+#
+# Signatures are stored in a dedicated branch (cla-signatures) as a JSON
+# file, providing a permanent, auditable record.
+#
+# Setup requirements:
+#   1. No additional secrets are needed — the workflow uses the default
+#      GITHUB_TOKEN.
+#   2. The CLA text is read from CLA.md in the repository root.
+# ---------------------------------------------------------------------------
+
+name: CLA Assistant
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  actions: write
+  contents: write       # to push signatures to the cla-signatures branch
+  pull-requests: write  # to comment on PRs
+  statuses: write       # to set the CLA check status
+
+jobs:
+  cla-check:
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'pull_request_target')
+      || (github.event_name == 'issue_comment'
+          && github.event.comment.body == 'recheck'
+          && github.event.issue.pull_request)
+      || (github.event_name == 'issue_comment'
+          && startsWith(github.event.comment.body, 'I have read the CLA Document')
+          && github.event.issue.pull_request)
+
+    steps:
+      - name: CLA Assistant
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: "signatures/cla.json"
+          path-to-document: "https://github.com/${{ github.repository }}/blob/main/CLA.md"
+          branch: "cla-signatures"
+          allowlist: "dependabot[bot],github-actions[bot]"
+
+          # ----- Custom messages -----
+          custom-notsigned-prcomment: >
+            Thank you for your pull request!  Before we can review it, you
+            need to sign the **[Contributor License Agreement](https://github.com/${{ github.repository }}/blob/main/CLA.md)**.
+
+            Please read the CLA carefully, then post the following comment
+            **in this PR** to sign:
+
+            > I have read the CLA Document and I hereby sign the CLA
+
+            This is a one-time requirement.  Once signed, all your future
+            contributions are covered.
+
+          custom-pr-sign-comment: >
+            I have read the CLA Document and I hereby sign the CLA
+
+          custom-allsigned-prcomment: >
+            All contributors have signed the CLA.  Thank you!
