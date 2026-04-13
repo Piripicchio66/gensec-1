@@ -358,6 +358,7 @@ def en2pr(
     '''
     This function gives for a given strain and a concrete class (from fben2())
     the correspondent stress from the constitutive law 'Parabola-Rectangle'.
+    
     '''
     if ((strain <= en2class.eps_cu2) & (strain >= 0)).any():
         if (strain >= en2class.eps_c2).any():

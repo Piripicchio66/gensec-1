@@ -44,6 +44,7 @@ class Steel_plate:
         Thickness of the steel plate [mm].
     - young : float
         Young modulus [MPa].
+
     """
 
     def __init__(self, grade, t=0, young=200000):
@@ -58,6 +59,7 @@ class Steel_plate:
             (thickness-independent context).
         young : float, optional
             Young's modulus [MPa].  Default is 200 000 MPa.
+
         """
         self.grade = grade
         self.t = t
@@ -104,6 +106,7 @@ class Steel_EN10025_2(Steel_plate):
         ValueError
             If the grade is not recognized or the thickness exceeds the
             range covered by EN 10025-2.
+            
         """
         #
         super().__init__(grade, t, young)

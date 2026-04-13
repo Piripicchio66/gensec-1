@@ -64,7 +64,7 @@ extensions = [
     #'sphinx.ext.viewcode',
     #'sphinxcontrib.mermaid',
     #'sphinx_search.extension',
-    'extensions.mycustomlang',
+    #'extensions.mycustomlang',
     #'sphinx.ext.intersphinx',
     "sphinx_multiversion",
 ]
@@ -120,7 +120,7 @@ numpydoc_attributes_as_param_list = False
 # ]
 
 # Local copy of js for mermaid
-mermaid_js_url = "_static/mermaid.min.js"
+mermaid_js_url = "static/mermaid.min.js"
 mermaid_init_js = "mermaid.initialize({startOnLoad:true, securityLevel:'loose'});"
 
 # Nitpick error: see -->
@@ -151,7 +151,7 @@ templates_path = ['_templates']
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-# This pattern also affects html_static_path and html_extra_path.
+# This pattern also affects htmlstatic_path and html_extra_path.
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
@@ -161,9 +161,9 @@ html_theme = "furo"
 
 from importlib.resources import files
 import gensec._docs_assets as _assets
-html_static_path = [
-    "_static",
-    str(files(_assets) / "_static"),
+htmlstatic_path = [
+    "static",
+    str(files(_assets) / "static"),
 ]  # path nel site-packages
 
 # Add any paths that contain custom static files (such as style sheets) here,
@@ -180,8 +180,8 @@ html_static_path = [
 #    "../data/qualiffiles",  # relative to conf.py
 #    ]
 
-html_favicon = '../src/gensec/logo_alone.png'
-html_logo = '../src/gensec/logolight.png'
+html_favicon = '../src/gensec/_docs_assets/static/logo/logo_alone.png'
+html_logo = '../src/gensec/_docs_assets/static/logo/logolight.png'
 html_title = 'GenSec Documentation'
 html_short_title = 'GenSec Doc'
 # For RTD Template
@@ -197,11 +197,11 @@ html_short_title = 'GenSec Doc'
 
 # NOTE: documentation is versioned by minor (X.Y), not patch (X.Y.Z)
 # Tags are intentionally NOT used for documentation builds
-smv_branch_whitelist = r'^(main|doc/\d+\.\d+)$'
+smv_branch_whitelist = r'^(doc/\d+\.\d+)$'
 smv_tag_whitelist = r"$^"
 smv_remote_whitelist = None
 smv_prefer_remote_refs = False
-smv_latest_version = "main"  # we'll show this as "latest" in the sidebar
+smv_latest_version = "latest"  # we'll show this as "latest" in the sidebar
 
 # For furo Template
 html_theme_options = {
