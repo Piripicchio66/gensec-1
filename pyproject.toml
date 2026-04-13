@@ -1,0 +1,60 @@
+[project]
+name = "gensec"
+dynamic = ["version"]                     # <── auto-derived version
+description = "Generic fiber-based cross-section calculator for composite structural members"
+readme = "README.md"
+license = {text = "AGPL-3.0-or-later"}
+authors = [{name = "Andrea Albero", email = "albero.andrea@outlook.it"}]
+urls = {Homepage = "https://alberoandrea.com", Repository = "https://github.com/jagtree/gensec"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.6",
+    "pyyaml>=6.0",
+    "shapely>= 2.0",
+    "triangle",
+    "setuptools_scm",        # Necessary for dynamic versioning
+]
+
+[project.scripts]
+gensec = "gensec.cli:main"
+
+#[build-system]
+#requires = ["hatchling"]
+#build-backend = "hatchling.build"
+
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm>=8", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gensec"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+#[tool.uv]
+#dev-dependencies = [
+#    "pytest>=7.0",
+#]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+]
+
+docs = [
+  "sphinx>=7.0",
+  "furo",
+  "sphinx-autodoc-typehints",
+  "myst-parser",
+  "sphinx-multiversion",
+  "sphinxcontrib-mermaid>=1",
+]
+
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"

@@ -1,0 +1,67 @@
+# GenSec input — T-section example (new generic format)
+# Reinforced concrete T-beam, EC2 / NTC 2018
+
+materials:
+  concrete_1:
+    type: concrete_ec2
+    class: C25/30
+
+  steel_1:
+    type: steel
+    fyk: 450.0
+    gamma_s: 1.15
+    Es: 200000
+    k_hardening: 1.0
+    eps_su: 0.01
+    works_in_compression: true
+
+section:
+  shape: tee
+  params:
+    bf: 800       # flange width [mm]
+    hf: 150       # flange thickness [mm]
+    bw: 300       # web width [mm]
+    hw: 450       # web height [mm]
+  bulk_material: concrete_1
+  mesh_size: 15       # target fiber size [mm]
+  mesh_method: grid   # or: triangle
+  rebars:
+    # Bottom rebars (inside web: x_offset=250, web goes to x=550)
+    - y: 40
+      x: 310
+      As: 314.16
+      material: steel_1
+      n_bars: 2
+      diameter: 20
+    - y: 40
+      x: 490
+      As: 314.16
+      material: steel_1
+      n_bars: 2
+      diameter: 20
+    # Top rebars (inside flange: x from 0 to 800)
+    - y: 560
+      x: 250
+      As: 628.32
+      material: steel_1
+      n_bars: 4
+      diameter: 20
+    - y: 560
+      x: 550
+      As: 628.32
+      material: steel_1
+      n_bars: 4
+      diameter: 20
+
+demands:
+  - name: Gravity
+    N_kN: -500
+    Mx_kNm: 350
+  - name: Seismic
+    N_kN: -200
+    Mx_kNm: 500
+
+output:
+  generate_mx_my: true
+  generate_3d_surface: true
+  n_angles_mx_my: 144  

@@ -1,0 +1,75 @@
+materials:
+  concrete_1:
+    type: concrete
+    fck: 25.0
+    gamma_c: 1.5
+    alpha_cc: 0.85
+
+  steel_1:
+    type: steel
+    fyk: 450.0
+    gamma_s: 1.15
+    works_in_compression: true
+
+section:
+  B: 300
+  H: 600
+  bulk_material: concrete_1
+  n_fibers_y: 100
+  n_fibers_x: 1
+  rebars:
+    - y: 40
+      As: 942.5
+      material: steel_1
+      n_bars: 3
+      diameter: 20
+    - y: 300
+      As: 402.1
+      material: steel_1
+      n_bars: 2
+      diameter: 16
+    - y: 560
+      As: 942.5
+      material: steel_1
+      n_bars: 3
+      diameter: 20
+
+# -------------------------------------------------------
+# Demands: always specify N_kN, Mx_kNm, My_kNm explicitly.
+# For uniaxial, set My_kNm: 0.
+# -------------------------------------------------------
+demands:
+  - name: Gravity
+    N_kN: -1500
+    Mx_kNm: 200
+    My_kNm: 0
+
+  - name: Seismic_X
+    N_kN: -1200
+    Mx_kNm: 280
+    My_kNm: 0
+
+# -------------------------------------------------------
+# Combinations: a named group of multiple (N, Mx, My) triples,
+# e.g. same section used on many columns.
+# GenSec reports the worst-case utilization per combination.
+# -------------------------------------------------------
+combinations:
+  - name: Seismic_X_envelope
+    demands:
+      - {N_kN: -1800, Mx_kNm: 180, My_kNm: 30}
+      - {N_kN: -1500, Mx_kNm: 250, My_kNm: 45}
+      - {N_kN: -1200, Mx_kNm: 300, My_kNm: 20}
+      - {N_kN: -900,  Mx_kNm: 280, My_kNm: 55}
+      - {N_kN: -2000, Mx_kNm: 150, My_kNm: 10}
+
+  - name: Seismic_Y_envelope
+    demands:
+      - {N_kN: -1600, Mx_kNm: 100, My_kNm: 120}
+      - {N_kN: -1400, Mx_kNm: 80,  My_kNm: 150}
+      - {N_kN: -1100, Mx_kNm: 120, My_kNm: 180}
+
+output:
+  n_angles_mx_my: 144  
+  generate_mx_my: true
+  generate_3d_surface: true

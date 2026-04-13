@@ -1,0 +1,805 @@
+# ---------------------------------------------------------------------------
+# GenSec — Copyright (c) 2026 Andrea Albero
+#
+# This file is part of GenSec.
+#
+# GenSec is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# GenSec is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public
+# License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with GenSec.  If not, see <https://www.gnu.org/licenses/>.
+# ---------------------------------------------------------------------------
+r"""
+Fiber integrator and equilibrium solver — biaxial bending.
+
+Supports both single-material and multi-material sections. When
+the section has ``mat_indices`` (from :class:`GenericSection` with
+``bulk_materials`` zones), the integrator groups fibers by material
+to call each constitutive law on its own subset. For single-material
+sections, the fast vectorized path is used unchanged.
+
+The strain plane has 3 parameters
+:math:`(\varepsilon_0, \chi_x, \chi_y)` and the internal forces
+are :math:`(N, M_x, M_y)`.
+
+Uniaxial bending is the special case :math:`\chi_y = 0`.
+"""
+
+import numpy as np
+
+
+class FiberSolver:
+    r"""
+    Material-agnostic fiber solver for biaxial bending + axial force.
+
+    Strain plane:
+
+    .. math::
+
+        \varepsilon(x, y) = \varepsilon_0
+            + \chi_x \, (y - y_{\text{ref}})
+            + \chi_y \, (x - x_{\text{ref}})
+
+    Internal forces:
+
+    .. math::
+
+        N   &= \sum_i \sigma_i \, A_i \\
+        M_x &= \sum_i \sigma_i \, A_i \, (y_i - y_{\text{ref}}) \\
+        M_y &= \sum_i \sigma_i \, A_i \, (x_i - x_{\text{ref}})
+
+    Convention:
+
+    - :math:`M_x > 0` compresses the bottom edge (:math:`y = 0`),
+      tensions the top edge. Right-hand rule: thumb along +x,
+      fingers curl from +y toward observer.
+    - :math:`M_y > 0` compresses the right edge (:math:`x = x_{\max}`),
+      tensions the left edge. Right-hand rule: thumb along +y,
+      fingers curl from +x toward observer.
+
+    Parameters
+    ----------
+    section : GenericSection or RectSection
+        Any section exposing ``x_fibers``, ``y_fibers``, ``A_fibers``,
+        ``x_rebars``, ``y_rebars``, ``A_rebars``, ``embedded_rebars``,
+        ``bulk_material``, ``rebars``, ``x_centroid``, ``y_centroid``.
+    x_ref : float or None, optional
+        Reference x-coordinate [mm]. Default: x-centroid.
+    y_ref : float or None, optional
+        Reference y-coordinate [mm]. Default: y-centroid.
+    """
+
+    def __init__(self, section, x_ref=None, y_ref=None):
+        self.sec = section
+        self.x_ref = x_ref if x_ref is not None else section.x_centroid
+        self.y_ref = y_ref if y_ref is not None else section.y_centroid
+        self._rebar_groups = self._build_rebar_groups()
+
+        # Pre-compute lever arms (constant for a given section)
+        self._ly_bulk = self.sec.y_fibers - self.y_ref
+        self._lx_bulk = self.sec.x_fibers - self.x_ref
+        self._ly_rebar = self.sec.y_rebars - self.y_ref
+        self._lx_rebar = self.sec.x_rebars - self.x_ref
+
+        # Build bulk material groups for multi-material support
+        self._bulk_groups = self._build_bulk_groups()
+        self._is_multi_material = len(self._bulk_groups) > 1
+
+    def _build_rebar_groups(self):
+        """Group rebar layers by material identity."""
+        groups = {}
+        for i, r in enumerate(self.sec.rebars):
+            mid = id(r.material)
+            if mid not in groups:
+                groups[mid] = (r.material, [])
+            groups[mid][1].append(i)
+        return [(m, np.array(ix)) for m, ix in groups.values()]
+
+    def _build_bulk_groups(self):
+        r"""
+        Group bulk fibers by material index.
+
+        For single-material sections (no ``mat_indices`` attribute or
+        all indices == 0), returns a single group covering all fibers.
+
+        Returns
+        -------
+        list of tuple
+            Each tuple is ``(Material, ndarray_of_fiber_indices)``.
+        """
+        sec = self.sec
+
+        # Check if section has multi-material zones
+        mat_indices = getattr(sec, 'mat_indices', None)
+        if mat_indices is None or np.all(mat_indices == 0):
+            # Single material: one group covering all fibers
+            idx = np.arange(sec.n_fibers)
+            return [(sec.bulk_material, idx)]
+
+        # Multi-material: group by index
+        all_mats = sec.get_all_bulk_materials()
+        groups = []
+        for mi in np.unique(mat_indices):
+            idx = np.where(mat_indices == mi)[0]
+            groups.append((all_mats[mi], idx))
+        return groups
+
+    def strain_field(self, eps0, chi_x, chi_y=0.0):
+        r"""
+        Compute strains at all fibers.
+
+        .. math::
+
+            \varepsilon_i = \varepsilon_0
+                + \chi_x (y_i - y_{\text{ref}})
+                - \chi_y (x_i - x_{\text{ref}})
+
+        The minus sign on :math:`\chi_y` ensures that positive
+        :math:`M_y` compresses the right edge (:math:`x = x_{\max}`),
+        consistent with the right-hand rule around the y-axis.
+
+        Parameters
+        ----------
+        eps0 : float
+            Strain at the reference point.
+        chi_x : float
+            Curvature about the x-axis [1/mm].
+        chi_y : float, optional
+            Curvature about the y-axis [1/mm]. Default 0.
+
+        Returns
+        -------
+        eps_bulk : numpy.ndarray
+        eps_rebars : numpy.ndarray
+        """
+        eb = eps0 + chi_x * self._ly_bulk - chi_y * self._lx_bulk
+        er = eps0 + chi_x * self._ly_rebar - chi_y * self._lx_rebar
+        return eb, er
+
+    def integrate(self, eps0, chi_x, chi_y=0.0):
+        r"""
+        Direct problem: strain parameters to internal forces.
+
+        For embedded rebars, the bulk material contribution at the
+        rebar location is subtracted to avoid double-counting:
+
+        .. math::
+
+            F_i = \bigl[\sigma_{\text{rebar},i}(\varepsilon_i)
+                  - \sigma_{\text{bulk}}(\varepsilon_i)\bigr] \, A_{s,i}
+
+        For multi-material sections, each fiber group is evaluated
+        with its own constitutive law.
+
+        Parameters
+        ----------
+        eps0 : float
+        chi_x : float
+            Curvature about x-axis [1/mm].
+        chi_y : float, optional
+            Curvature about y-axis [1/mm]. Default 0.
+
+        Returns
+        -------
+        N : float
+            Axial force [N]. Positive = tension.
+        Mx : float
+            Bending moment about x-axis [N*mm].
+        My : float
+            Bending moment about y-axis [N*mm].
+        """
+        eb, er = self.strain_field(eps0, chi_x, chi_y)
+
+        # ---- Bulk contribution ----
+        if not self._is_multi_material:
+            # Fast path: single material on all fibers
+            sb = self.sec.bulk_material.stress_array(eb)
+        else:
+            # Multi-material: evaluate each group separately
+            sb = np.zeros_like(eb)
+            for mat, idx in self._bulk_groups:
+                sb[idx] = mat.stress_array(eb[idx])
+
+        fA = sb * self.sec.A_fibers
+        N = float(np.sum(fA))
+        Mx = float(np.sum(fA * self._ly_bulk))
+        My = -float(np.sum(fA * self._lx_bulk))
+
+        # ---- Rebar contribution ----
+        # Bulk stress at rebar locations (for embedded subtraction).
+        # Use the primary bulk_material — for multi-material, ideally
+        # we should look up which zone each rebar falls in. For now
+        # this is acceptable since rebars are typically embedded in
+        # the primary bulk material.
+        sb_at_rebars = self.sec.bulk_material.stress_array(er)
+        embedded = self.sec.embedded_rebars
+
+        for mat, idx in self._rebar_groups:
+            s_rebar = mat.stress_array(er[idx])
+            a = self.sec.A_rebars[idx]
+            emb = embedded[idx]
+
+            s_net = s_rebar.copy()
+            s_net[emb] -= sb_at_rebars[idx][emb]
+
+            fa = s_net * a
+            N += float(np.sum(fa))
+            Mx += float(np.sum(fa * self._ly_rebar[idx]))
+            My -= float(np.sum(fa * self._lx_rebar[idx]))
+
+        return N, Mx, My
+
+    def jacobian(self, eps0, chi_x, chi_y=0.0, deps=1e-8):
+        r"""
+        Numerical 3x3 Jacobian via forward finite differences.
+
+        .. math::
+
+            \mathbf{J} = \frac{\partial(N, M_x, M_y)}
+                              {\partial(\varepsilon_0, \chi_x, \chi_y)}
+
+        Parameters
+        ----------
+        eps0, chi_x, chi_y : float
+        deps : float, optional
+            Perturbation. Default 1e-8.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape (3, 3).
+        """
+        f0 = np.array(self.integrate(eps0, chi_x, chi_y))
+        J = np.empty((3, 3))
+        for j, (de, dx, dy) in enumerate([
+            (deps, 0, 0), (0, deps, 0), (0, 0, deps)
+        ]):
+            f1 = np.array(self.integrate(
+                eps0 + de, chi_x + dx, chi_y + dy))
+            J[:, j] = (f1 - f0) / deps
+        return J
+
+    def _is_uniaxial(self):
+        r"""
+        Detect if the section is effectively uniaxial.
+
+        Returns ``True`` when all fibers share the same x-coordinate
+        (meaning :math:`\chi_y` has no effect and the Jacobian would
+        be singular in 3D).
+
+        Returns
+        -------
+        bool
+        """
+        lx_range = (np.max(np.abs(self._lx_bulk))
+                    + np.max(np.abs(self._lx_rebar))
+                    if len(self._lx_rebar) > 0
+                    else np.max(np.abs(self._lx_bulk)))
+        return lx_range < 1e-6
+
+    def solve_equilibrium(self, N_target, Mx_target, My_target=0.0,
+                          eps0_init=0.0, chi_x_init=1e-6,
+                          chi_y_init=0.0,
+                          tol=1e-3, max_iter=50):
+        r"""
+        Inverse problem: find strain plane for target (N, Mx, My).
+
+        Newton-Raphson with backtracking line search.  Automatically
+        reduces to a 2×2 system when the section is uniaxial, and
+        further to a **1×1 bisection** when both target moments are
+        negligible (pure axial load).
+
+        The pure-axial branch exploits the monotonicity of
+        :math:`N(\varepsilon_0)` at :math:`\chi_x = \chi_y = 0`:
+
+        .. math::
+
+            \frac{\partial N}{\partial \varepsilon_0}\bigg|_{\chi=0}
+            = \sum_i \frac{\partial \sigma_i}
+              {\partial \varepsilon}\,A_i \;\ge\; 0
+
+        which guarantees unique bracketing and convergence of the
+        bisection search.
+
+        Parameters
+        ----------
+        N_target : float
+            Target axial force [N].
+        Mx_target : float
+            Target moment about x-axis [N*mm].
+        My_target : float, optional
+            Target moment about y-axis [N*mm]. Default 0.
+        eps0_init, chi_x_init, chi_y_init : float, optional
+            Initial guesses.
+        tol : float, optional
+            Force tolerance [N]; moment tolerance is ``tol * 1000``.
+        max_iter : int, optional
+
+        Returns
+        -------
+        dict
+            Keys: ``eps0``, ``chi_x``, ``chi_y``, ``N``, ``Mx``,
+            ``My``, ``converged``, ``iterations``.
+        """
+        M_tol = tol * 1000  # moment tolerance [N·mm]
+
+        # ----------------------------------------------------------
+        #  Fast path: pure axial load (both moments negligible)
+        # ----------------------------------------------------------
+        if abs(Mx_target) < M_tol and abs(My_target) < M_tol:
+            sol = self._solve_pure_axial(N_target, tol, max_iter)
+            if sol["converged"]:
+                return sol
+            # If pure-axial fails (shouldn't), fall through to 2×2
+
+        # ----------------------------------------------------------
+        #  Uniaxial or near-uniaxial
+        # ----------------------------------------------------------
+        if self._is_uniaxial():
+            return self._solve_uniaxial(
+                N_target, Mx_target, eps0_init, chi_x_init,
+                tol, max_iter)
+
+        if abs(My_target) < M_tol:
+            sol = self._solve_uniaxial(
+                N_target, Mx_target, eps0_init, chi_x_init,
+                tol, max_iter)
+            if sol["converged"] and abs(sol["My"]) < M_tol:
+                return sol
+
+        return self._solve_biaxial(
+            N_target, Mx_target, My_target,
+            eps0_init, chi_x_init, chi_y_init,
+            tol, max_iter)
+
+    # ------------------------------------------------------------------
+    #  Pure axial solver  (1-unknown bisection)
+    # ------------------------------------------------------------------
+
+    def _solve_pure_axial(self, N_target, tol, max_iter):
+        r"""
+        Find :math:`\varepsilon_0` for pure axial load
+        (:math:`\chi_x = \chi_y = 0`).
+
+        The function :math:`N(\varepsilon_0)` at zero curvature is
+        **not globally monotone** because the concrete constitutive
+        law returns zero stress for strains beyond
+        :math:`\varepsilon_{cu2}`, creating a non-monotone drop at
+        the compressive end.  However, :math:`N` *is* monotonically
+        non-decreasing on the sub-interval
+        :math:`[\varepsilon_{c2},\, \varepsilon_{su}]` where all
+        constitutive laws are active, and the vast majority of
+        practical targets lie in this range.
+
+        Strategy:
+
+        1.  Scan :math:`N(\varepsilon_0)` on a fine grid spanning
+            the full material strain range.
+        2.  Find consecutive grid points where :math:`N` crosses
+            :math:`N_{\text{target}}`.  Among all crossings, pick
+            the one in the monotone working region (closest to the
+            centroid strain).
+        3.  Bisect within that local bracket.
+
+        Parameters
+        ----------
+        N_target : float
+            Target axial force [N].
+        tol : float
+            Convergence tolerance on N [N].
+        max_iter : int
+            Maximum bisection iterations.
+
+        Returns
+        -------
+        dict
+        """
+        sec = self.sec
+
+        # --- Build the full strain scan range ---
+        eps_lo = sec.bulk_material.eps_min
+        eps_hi = 0.0
+        for r in sec.rebars:
+            eps_lo = min(eps_lo, r.material.eps_min)
+            eps_hi = max(eps_hi, r.material.eps_max)
+        eps_lo *= 1.01
+        eps_hi *= 1.01
+
+        # --- Fine scan ---
+        n_scan = 120
+        eps_vals = np.linspace(eps_lo, eps_hi, n_scan)
+        N_vals = np.empty(n_scan)
+        for k in range(n_scan):
+            N_vals[k], _, _ = self.integrate(eps_vals[k], 0.0, 0.0)
+
+        # --- Find all crossings of N_target ---
+        crossings = []
+        for k in range(n_scan - 1):
+            if ((N_vals[k] - N_target) * (N_vals[k + 1] - N_target) <= 0
+                    and abs(N_vals[k + 1] - N_vals[k]) > 0.1):
+                crossings.append(k)
+
+        if not crossings:
+            return self._fail_result()
+
+        # Pick the best crossing: prefer the one closest to eps0=0
+        # (i.e. in the working monotone region, not in the
+        # non-physical tail beyond eps_cu2).
+        best_k = min(crossings,
+                     key=lambda k: abs(eps_vals[k] + eps_vals[k + 1]))
+
+        a = eps_vals[best_k]
+        b = eps_vals[best_k + 1]
+        Na = N_vals[best_k]
+
+        # --- Bisection within the local bracket ---
+        for i in range(max_iter):
+            mid = 0.5 * (a + b)
+            N_mid, Mx_mid, My_mid = self.integrate(mid, 0.0, 0.0)
+            if abs(N_mid - N_target) < tol:
+                return {"eps0": mid, "chi_x": 0.0, "chi_y": 0.0,
+                        "N": N_mid, "Mx": Mx_mid, "My": My_mid,
+                        "converged": True, "iterations": i + 1}
+            if (N_mid - N_target) * (Na - N_target) <= 0:
+                b = mid
+            else:
+                a = mid
+                Na = N_mid
+
+        mid = 0.5 * (a + b)
+        N_f, Mx_f, My_f = self.integrate(mid, 0.0, 0.0)
+        converged = abs(N_f - N_target) < tol
+        return {"eps0": mid, "chi_x": 0.0, "chi_y": 0.0,
+                "N": N_f, "Mx": Mx_f, "My": My_f,
+                "converged": converged, "iterations": max_iter}
+
+    @staticmethod
+    def _fail_result():
+        """Return a non-converged result placeholder."""
+        return {"eps0": 0.0, "chi_x": 0.0, "chi_y": 0.0,
+                "N": 0.0, "Mx": 0.0, "My": 0.0,
+                "converged": False, "iterations": 0}
+
+    # ------------------------------------------------------------------
+    #  Internal: elastic initial guess
+    # ------------------------------------------------------------------
+
+    def _elastic_initial_guess(self, N_target, Mx_target, My_target=0.0):
+        r"""
+        Estimate initial (eps0, chi_x, chi_y) from linear-elastic theory.
+
+        Returns
+        -------
+        eps0, chi_x, chi_y : float
+        """
+        try:
+            J0 = self.jacobian(0.0, 0.0, 0.0)
+            target = np.array([N_target, Mx_target, My_target])
+            x0 = np.linalg.solve(J0, target)
+            x0[0] = np.clip(x0[0], -0.003, 0.003)
+            x0[1] = np.clip(x0[1], -1e-4, 1e-4)
+            x0[2] = np.clip(x0[2], -1e-4, 1e-4)
+            return float(x0[0]), float(x0[1]), float(x0[2])
+        except np.linalg.LinAlgError:
+            sec = self.sec
+            A_gross = getattr(sec, 'gross_area', sec.B * sec.H)
+            I_approx = A_gross * sec.H**2 / 12
+            eps0_est = N_target / (A_gross * 30000)
+            chi_x_est = (Mx_target / (30000 * I_approx)
+                         if I_approx > 0 else 1e-6)
+            return float(eps0_est), float(chi_x_est), 0.0
+
+    def _adaptive_deps(self, eps0, chi_x, chi_y=0.0):
+        r"""
+        Adaptive perturbation size for the Jacobian.
+
+        Returns
+        -------
+        deps_e, deps_cx, deps_cy : float
+        """
+        deps_e = max(abs(eps0) * 1e-7, 1e-10)
+        deps_cx = max(abs(chi_x) * 1e-7, 1e-10)
+        deps_cy = max(abs(chi_y) * 1e-7, 1e-10)
+        return deps_e, deps_cx, deps_cy
+
+    # ------------------------------------------------------------------
+    #  Uniaxial solver
+    # ------------------------------------------------------------------
+
+    def _solve_uniaxial(self, N_target, Mx_target,
+                        eps0_init, chi_x_init, tol, max_iter):
+        r"""
+        2-unknown solver (:math:`\chi_y` fixed at 0).
+
+        Strategy:
+
+        1. Try elastic initial guess → Newton-Raphson.
+        2. If that fails, warm-start from a pure-axial solve at
+           :math:`N = N_{\text{target}}` with a small perturbation
+           in :math:`\chi_x` to break the singularity.
+        3. Multi-start grid of :math:`\chi_x` values.
+
+        Parameters
+        ----------
+        N_target, Mx_target : float
+        eps0_init, chi_x_init : float
+        tol : float
+        max_iter : int
+
+        Returns
+        -------
+        dict
+        """
+        # --- Attempt 1: user-supplied or elastic guess ---
+        if eps0_init == 0.0 and chi_x_init == 1e-6:
+            e0, c0, _ = self._elastic_initial_guess(
+                N_target, Mx_target, 0.0)
+        else:
+            e0, c0 = eps0_init, chi_x_init
+
+        sol = self._nr_uniaxial(N_target, Mx_target, e0, c0,
+                                tol, max_iter)
+        if sol["converged"]:
+            return sol
+
+        # --- Attempt 2: warm-start from pure-axial bisection ---
+        sol_axial = self._solve_pure_axial(N_target, tol, max_iter)
+        if sol_axial["converged"]:
+            e0_ax = sol_axial["eps0"]
+            # Estimate chi_x from the sign of Mx_target
+            chi_sign = 1.0 if Mx_target >= 0 else -1.0
+            for chi_mag in [1e-6, 5e-6, 1e-5, 3e-5, 5e-5]:
+                sol2 = self._nr_uniaxial(
+                    N_target, Mx_target,
+                    e0_ax, chi_sign * chi_mag,
+                    tol, max_iter)
+                if sol2["converged"]:
+                    return sol2
+
+        # --- Attempt 3: multi-start grid ---
+        emb = self.sec.bulk_material.eps_min
+        for chi_sign in [1.0, -1.0]:
+            for chi_mag in [1e-5, 5e-6, 2e-5, 3e-5, 5e-5]:
+                chi_try = chi_sign * chi_mag
+                try:
+                    N0, _, _ = self.integrate(0.0, chi_try, 0.0)
+                    N1, _, _ = self.integrate(1e-6, chi_try, 0.0)
+                    dNde = (N1 - N0) / 1e-6
+                    if abs(dNde) > 1:
+                        eps0_try = (N_target - N0) / dNde
+                        eps0_try = np.clip(eps0_try, emb, -emb)
+                    else:
+                        eps0_try = emb / 2
+                except Exception:
+                    eps0_try = emb / 2
+
+                sol = self._nr_uniaxial(N_target, Mx_target,
+                                        eps0_try, chi_try,
+                                        tol, max_iter // 2)
+                if sol["converged"]:
+                    return sol
+
+        return self._nr_uniaxial(N_target, Mx_target, e0, c0,
+                                 tol, max_iter)
+
+    def _nr_uniaxial(self, N_target, Mx_target, eps0, chi_x,
+                     tol, max_iter):
+        """Core Newton-Raphson for uniaxial case."""
+        for i in range(max_iter):
+            N, Mx, My = self.integrate(eps0, chi_x, 0.0)
+            r = np.array([N - N_target, Mx - Mx_target])
+
+            if abs(r[0]) < tol and abs(r[1]) < tol * 1000:
+                return {
+                    "eps0": eps0, "chi_x": chi_x, "chi_y": 0.0,
+                    "N": N, "Mx": Mx, "My": My,
+                    "converged": True, "iterations": i + 1,
+                }
+
+            de, dc, _ = self._adaptive_deps(eps0, chi_x, 0.0)
+            N1, Mx1, _ = self.integrate(eps0 + de, chi_x, 0.0)
+            N2, Mx2, _ = self.integrate(eps0, chi_x + dc, 0.0)
+            J = np.array([[(N1 - N) / de, (N2 - N) / dc],
+                          [(Mx1 - Mx) / de, (Mx2 - Mx) / dc]])
+
+            det = abs(J[0, 0] * J[1, 1] - J[0, 1] * J[1, 0])
+            if det < 1e-20:
+                eps0 += 1e-5
+                chi_x += 1e-7
+                continue
+
+            try:
+                d = np.linalg.solve(J, -r)
+            except np.linalg.LinAlgError:
+                eps0 += 1e-5
+                chi_x += 1e-7
+                continue
+
+            alpha = 1.0
+            r_norm = np.linalg.norm(r)
+            for _ in range(15):
+                e_new = eps0 + alpha * d[0]
+                c_new = chi_x + alpha * d[1]
+                Nn, Mxn, _ = self.integrate(e_new, c_new, 0.0)
+                rn = np.array([Nn - N_target, Mxn - Mx_target])
+                if np.linalg.norm(rn) < r_norm:
+                    break
+                alpha *= 0.5
+            eps0 += alpha * d[0]
+            chi_x += alpha * d[1]
+
+        N, Mx, My = self.integrate(eps0, chi_x, 0.0)
+        return {
+            "eps0": eps0, "chi_x": chi_x, "chi_y": 0.0,
+            "N": N, "Mx": Mx, "My": My,
+            "converged": False, "iterations": max_iter,
+        }
+
+    # ------------------------------------------------------------------
+    #  Biaxial solver
+    # ------------------------------------------------------------------
+
+    def _solve_biaxial(self, N_target, Mx_target, My_target,
+                       eps0_init, chi_x_init, chi_y_init,
+                       tol, max_iter):
+        """3-unknown solver with multi-start strategy."""
+        if (eps0_init == 0.0 and chi_x_init == 1e-6
+                and chi_y_init == 0.0):
+            e0, cx0, cy0 = self._elastic_initial_guess(
+                N_target, Mx_target, My_target)
+        else:
+            e0, cx0, cy0 = eps0_init, chi_x_init, chi_y_init
+
+        sol = self._nr_biaxial(N_target, Mx_target, My_target,
+                               e0, cx0, cy0, tol, max_iter)
+        if sol["converged"]:
+            return sol
+
+        # Warm-start from uniaxial
+        sol_uni = self._solve_uniaxial(
+            N_target, Mx_target, 0.0, 1e-6, tol, max_iter // 2)
+        if sol_uni["converged"]:
+            sol2 = self._nr_biaxial(
+                N_target, Mx_target, My_target,
+                sol_uni["eps0"], sol_uni["chi_x"], 1e-7,
+                tol, max_iter)
+            if sol2["converged"]:
+                return sol2
+
+        # Grid of chi_y
+        for cy_try in [1e-6, -1e-6, 5e-6, -5e-6, 1e-5, -1e-5]:
+            sol3 = self._nr_biaxial(
+                N_target, Mx_target, My_target,
+                e0, cx0, cy_try, tol, max_iter // 2)
+            if sol3["converged"]:
+                return sol3
+
+        return sol
+
+    def _nr_biaxial(self, N_target, Mx_target, My_target,
+                    eps0, chi_x, chi_y, tol, max_iter):
+        """Core Newton-Raphson for biaxial case."""
+        x = np.array([eps0, chi_x, chi_y])
+        target = np.array([N_target, Mx_target, My_target])
+        tol_vec = np.array([tol, tol * 1000, tol * 1000])
+
+        for i in range(max_iter):
+            f = np.array(self.integrate(x[0], x[1], x[2]))
+            r = f - target
+
+            if np.all(np.abs(r) < tol_vec):
+                return {
+                    "eps0": x[0], "chi_x": x[1], "chi_y": x[2],
+                    "N": f[0], "Mx": f[1], "My": f[2],
+                    "converged": True, "iterations": i + 1,
+                }
+
+            de, dcx, dcy = self._adaptive_deps(x[0], x[1], x[2])
+            f0 = f
+            J = np.empty((3, 3))
+            for j, dp in enumerate([
+                np.array([de, 0, 0]),
+                np.array([0, dcx, 0]),
+                np.array([0, 0, dcy]),
+            ]):
+                x_p = x + dp
+                f_p = np.array(self.integrate(x_p[0], x_p[1], x_p[2]))
+                J[:, j] = (f_p - f0) / dp[j]
+
+            try:
+                d = np.linalg.solve(J, -r)
+            except np.linalg.LinAlgError:
+                x += np.array([1e-5, 1e-7, 1e-7])
+                continue
+
+            alpha = 1.0
+            r_norm = np.linalg.norm(r)
+            for _ in range(15):
+                x_new = x + alpha * d
+                f_new = np.array(self.integrate(
+                    x_new[0], x_new[1], x_new[2]))
+                r_new = f_new - target
+                if np.linalg.norm(r_new) < r_norm:
+                    break
+                alpha *= 0.5
+            x = x + alpha * d
+
+        f = np.array(self.integrate(x[0], x[1], x[2]))
+        return {
+            "eps0": x[0], "chi_x": x[1], "chi_y": x[2],
+            "N": f[0], "Mx": f[1], "My": f[2],
+            "converged": False, "iterations": max_iter,
+        }
+
+    # ------------------------------------------------------------------
+    #  Post-processing
+    # ------------------------------------------------------------------
+
+    def get_fiber_results(self, eps0, chi_x, chi_y=0.0):
+        r"""
+        Full strain/stress state at every fiber.
+
+        For multi-material sections, each bulk fiber is evaluated
+        with its own constitutive law.
+
+        Parameters
+        ----------
+        eps0 : float
+        chi_x : float
+        chi_y : float, optional
+
+        Returns
+        -------
+        dict
+            ``'bulk'``: sub-dict with ``x``, ``y``, ``eps``,
+            ``sigma``, ``dA``.
+            ``'rebars'``: sub-dict with ``x``, ``y``, ``eps``,
+            ``sigma`` (gross), ``sigma_net`` (net after bulk
+            subtraction), ``A``, ``embedded``.
+        """
+        eb, er = self.strain_field(eps0, chi_x, chi_y)
+
+        # Bulk stresses
+        if not self._is_multi_material:
+            sb = self.sec.bulk_material.stress_array(eb)
+        else:
+            sb = np.zeros_like(eb)
+            for mat, idx in self._bulk_groups:
+                sb[idx] = mat.stress_array(eb[idx])
+
+        # Rebar stresses
+        sr_gross = np.zeros_like(er)
+        for mat, idx in self._rebar_groups:
+            sr_gross[idx] = mat.stress_array(er[idx])
+
+        # Net rebar stress (subtract bulk at rebar location)
+        sb_at_rebars = self.sec.bulk_material.stress_array(er)
+        sr_net = sr_gross.copy()
+        emb = self.sec.embedded_rebars
+        sr_net[emb] -= sb_at_rebars[emb]
+
+        return {
+            "bulk": {
+                "x": self.sec.x_fibers.copy(),
+                "y": self.sec.y_fibers.copy(),
+                "eps": eb.copy(),
+                "sigma": sb.copy(),
+                "dA": self.sec.A_fibers.copy(),
+            },
+            "rebars": {
+                "x": self.sec.x_rebars.copy(),
+                "y": self.sec.y_rebars.copy(),
+                "eps": er.copy(),
+                "sigma": sr_gross.copy(),
+                "sigma_net": sr_net.copy(),
+                "A": self.sec.A_rebars.copy(),
+                "embedded": self.sec.embedded_rebars.copy(),
+            },
+        }
