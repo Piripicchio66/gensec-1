@@ -199,7 +199,22 @@
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
-<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+<div id="searchbox"></div><div class="sidebar-scroll">
+<div class="version-switcher">
+  <p><strong>Versions</strong></p>
+  <ul>
+    
+      <li>
+        <a href="../../0.1/user_guide/sign_conventions.html">doc/0.1</a>
+      </li>
+    
+      <li>
+        <a href="sign_conventions.html">doc/0.2</a>
+      </li>
+    
+  </ul>
+</div>
+<div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
@@ -242,9 +257,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../about.html">About</a></li>
 </ul>
 
-</div>
-</div>
-
+</div></div>
       </div>
       
     </div>
@@ -304,6 +317,32 @@ enforced automatically.</p>
 </section>
 <section id="force-and-moment-signs">
 <h2>Force and moment signs<a class="headerlink" href="#force-and-moment-signs" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Quantity</p></th>
+<th class="head"><p>Positive</p></th>
+<th class="head"><p>Negative</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><span class="math notranslate nohighlight">\(N\)</span> (axial force)</p></td>
+<td><p>Tension</p></td>
+<td><p>Compression</p></td>
+</tr>
+<tr class="row-odd"><td><p><span class="math notranslate nohighlight">\(M_x\)</span> (moment
+about <span class="math notranslate nohighlight">\(x\)</span>)</p></td>
+<td><p>Bottom edge in compression</p></td>
+<td><p>Top edge in compression</p></td>
+</tr>
+<tr class="row-even"><td><p><span class="math notranslate nohighlight">\(M_y\)</span> (moment
+about <span class="math notranslate nohighlight">\(y\)</span>)</p></td>
+<td><p>Left edge in compression</p></td>
+<td><p>Right edge in compression</p></td>
+</tr>
+</tbody>
+</table>
+</div>
 <p>The moment convention follows directly from the fiber integration
 (see <a class="reference internal" href="../theory/fiber_method.html"><span class="doc">The fiber method</span></a>):</p>
 <div class="math-wrapper docutils container">

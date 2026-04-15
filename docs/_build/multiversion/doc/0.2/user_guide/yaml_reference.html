@@ -199,7 +199,22 @@
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
-<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+<div id="searchbox"></div><div class="sidebar-scroll">
+<div class="version-switcher">
+  <p><strong>Versions</strong></p>
+  <ul>
+    
+      <li>
+        <a href="../../0.1/user_guide/yaml_reference.html">doc/0.1</a>
+      </li>
+    
+      <li>
+        <a href="yaml_reference.html">doc/0.2</a>
+      </li>
+    
+  </ul>
+</div>
+<div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
@@ -242,9 +257,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../about.html">About</a></li>
 </ul>
 
-</div>
-</div>
-
+</div></div>
       </div>
       
     </div>
@@ -360,6 +373,26 @@ chosen tensile strength (<span class="math notranslate nohighlight">\(f_{ctd}\)<
 <span class="math notranslate nohighlight">\(f_{ctk,0.05}\)</span>) are extracted from the EC2 property object and passed
 to the <a class="reference internal" href="../api/gensec.materials.html#gensec.materials.Concrete" title="gensec.materials.Concrete"><code class="xref py py-class docutils literal notranslate"><span class="pre">Concrete</span></code></a> constructor.  The <code class="docutils literal notranslate"><span class="pre">tension_fct</span></code>
 field controls which value is used:</p>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">tension_fct</span></code></p></th>
+<th class="head"><p>Tensile strength used</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">fctd</span></code></p></td>
+<td><p><span class="math notranslate nohighlight">\(f_{ctd,0.05} = \alpha_{ct}\,f_{ctk,0.05}/\gamma_c\)</span></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">fctm</span></code></p></td>
+<td><p><span class="math notranslate nohighlight">\(f_{ctm}\)</span> (mean tensile strength)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">fctk</span></code></p></td>
+<td><p><span class="math notranslate nohighlight">\(f_{ctk,0.05}\)</span> (characteristic, 5 % fractile)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Only the <strong>French National Annex</strong> (NF EN 1992-1-1/NA) is implemented.

@@ -18,6 +18,7 @@ Plotting
 .. automodule:: gensec.output.plots
    :members:
    :show-inheritance:
+   :no-index: 
 
 
 CSV and JSON export
@@ -26,6 +27,7 @@ CSV and JSON export
 .. automodule:: gensec.output.export
    :members:
    :show-inheritance:
+   :no-index: 
 
 
 Terminal reporting
@@ -34,11 +36,13 @@ Terminal reporting
 .. automodule:: gensec.output.report
    :members:
    :show-inheritance:
+   :no-index: 
 
+..
+   Package-level exports
+   ----------------------
 
-Package-level exports
-----------------------
-
-.. automodule:: gensec.output
-   :members:
-   :show-inheritance:
+   .. automodule:: gensec.output
+      :members:
+      :show-inheritance:
+      :no-index:

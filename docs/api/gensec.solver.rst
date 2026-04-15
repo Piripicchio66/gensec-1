@@ -25,6 +25,7 @@ Fiber integrator and equilibrium solver
 .. automodule:: gensec.solver.integrator
    :members:
    :show-inheritance:
+   :no-index: 
 
 
 Resistance domain generator
@@ -33,6 +34,7 @@ Resistance domain generator
 .. automodule:: gensec.solver.capacity
    :members:
    :show-inheritance:
+   :no-index: 
 
 
 Demand checker
@@ -41,11 +43,13 @@ Demand checker
 .. automodule:: gensec.solver.check
    :members:
    :show-inheritance:
+   :no-index: 
 
+..
+   Package-level exports
+   ----------------------
 
-Package-level exports
-----------------------
-
-.. automodule:: gensec.solver
-   :members:
-   :show-inheritance:
+   .. automodule:: gensec.solver
+      :members:
+      :show-inheritance:
+      :no-index: 

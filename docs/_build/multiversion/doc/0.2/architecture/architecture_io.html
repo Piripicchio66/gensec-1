@@ -199,7 +199,22 @@
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
-<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+<div id="searchbox"></div><div class="sidebar-scroll">
+<div class="version-switcher">
+  <p><strong>Versions</strong></p>
+  <ul>
+    
+      <li>
+        <a href="../../0.1/architecture/architecture_io.html">doc/0.1</a>
+      </li>
+    
+      <li>
+        <a href="architecture_io.html">doc/0.2</a>
+      </li>
+    
+  </ul>
+</div>
+<div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../user_guide/installation.html">Installation</a></li>
@@ -242,9 +257,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../about.html">About</a></li>
 </ul>
 
-</div>
-</div>
-
+</div></div>
       </div>
       
     </div>
@@ -371,6 +384,35 @@ dependencies: “A → B” means “B needs output from A”.</p>
     style OUT fill:#f3e5f5
     </pre><p>The parser (<code class="docutils literal notranslate"><span class="pre">io_yaml.py</span></code>) reads each block and constructs the
 corresponding Python objects:</p>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>YAML block</p></th>
+<th class="head"><p>Python object produced</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">materials</span></code></p></td>
+<td><p>dict of <code class="docutils literal notranslate"><span class="pre">Material</span></code> instances</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">section</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">GenericSection</span></code> or <code class="docutils literal notranslate"><span class="pre">RectSection</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">demands</span></code></p></td>
+<td><p>list of <code class="docutils literal notranslate"><span class="pre">{&quot;name&quot;,</span> <span class="pre">&quot;N&quot;,</span> <span class="pre">&quot;Mx&quot;,</span> <span class="pre">&quot;My&quot;}</span></code> dicts</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">combinations</span></code></p></td>
+<td><p>list of parsed combination specs</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">envelopes</span></code></p></td>
+<td><p>list of parsed envelope specs</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">output</span></code></p></td>
+<td><p>dict of flags with defaults applied</p></td>
+</tr>
+</tbody>
+</table>
+</div>
 <section id="demand-resolution">
 <h3><a class="toc-backref" href="#id3" role="doc-backlink">Demand resolution</a><a class="headerlink" href="#demand-resolution" title="Link to this heading">¶</a></h3>
 <p>Combinations and envelopes reference demands by name (<code class="docutils literal notranslate"><span class="pre">ref:</span> <span class="pre">G</span></code>).
@@ -460,6 +502,47 @@ interactive plots.</p></li>
 <section id="output-files">
 <h2><a class="toc-backref" href="#id8" role="doc-backlink">Output files</a><a class="headerlink" href="#output-files" title="Link to this heading">¶</a></h2>
 <p>A typical run with all options enabled produces:</p>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>File</p></th>
+<th class="head"><p>Content</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">n_mx_domain.csv</span></code> / <code class="docutils literal notranslate"><span class="pre">.json</span></code></p></td>
+<td><p>N-Mx interaction point cloud</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">n_my_domain.csv</span></code></p></td>
+<td><p>N-My interaction point cloud</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">surface_3d.csv</span></code> / <code class="docutils literal notranslate"><span class="pre">.json</span></code></p></td>
+<td><p>3D surface (N, Mx, My) point cloud</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mx_chi_N{label}.json</span></code> / <code class="docutils literal notranslate"><span class="pre">.csv</span></code></p></td>
+<td><p>M-χ curve at fixed N (with key points)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mx_my_N{label}.json</span></code> / <code class="docutils literal notranslate"><span class="pre">.csv</span></code></p></td>
+<td><p>Mx-My contour at fixed N</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">demand_summary.csv</span></code> / <code class="docutils literal notranslate"><span class="pre">.json</span></code></p></td>
+<td><p>Per-demand η values</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">combination_summary.json</span></code></p></td>
+<td><p>Staged combination results</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">envelope_summary.json</span></code></p></td>
+<td><p>Envelope results with governing member</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">verification_summary.json</span></code></p></td>
+<td><p>Unified export (all three above)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">fibers_{name}.csv</span></code></p></td>
+<td><p>Per-fiber strain/stress for each demand</p></td>
+</tr>
+</tbody>
+</table>
+</div>
 <p>PNG plots: <code class="docutils literal notranslate"><span class="pre">n_mx_diagram.png</span></code>, <code class="docutils literal notranslate"><span class="pre">n_my_diagram.png</span></code>,
 <code class="docutils literal notranslate"><span class="pre">surface_3d.png</span></code>, <code class="docutils literal notranslate"><span class="pre">mx_my_N{label}.png</span></code>, <code class="docutils literal notranslate"><span class="pre">mx_chi_N{label}.png</span></code>,
 <code class="docutils literal notranslate"><span class="pre">section_{name}.png</span></code>, <code class="docutils literal notranslate"><span class="pre">state_{name}.png</span></code>,

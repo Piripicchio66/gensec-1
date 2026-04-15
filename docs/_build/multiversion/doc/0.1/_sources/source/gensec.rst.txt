@@ -23,6 +23,14 @@ gensec.cli module
    :undoc-members:
    :show-inheritance:
 
+gensec.generate\_version module
+-------------------------------
+
+.. automodule:: gensec.generate_version
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 gensec.io\_yaml module
 ----------------------
 

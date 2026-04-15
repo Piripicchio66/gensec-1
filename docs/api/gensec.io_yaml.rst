@@ -17,3 +17,4 @@ See :doc:`/user_guide/yaml_reference` for the full input specification.
 .. automodule:: gensec.io_yaml
    :members:
    :show-inheritance:
+   :no-index: 
