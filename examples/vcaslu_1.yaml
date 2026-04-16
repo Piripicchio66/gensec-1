@@ -21,12 +21,12 @@ section:
   n_fibers_y: 40
   n_fibers_x: 20
   rebars:
-    - {x: 30, y: 30,   As: 201.06, material: B450C, n_bars: 1, diameter: 16}
-    - {x: 30, y: 250,  As: 201.06, material: B450C, n_bars: 1, diameter: 16}
-    - {x: 30, y: 470,  As: 201.06, material: B450C, n_bars: 1, diameter: 16}
-    - {x: 270, y: 30,  As: 201.06, material: B450C, n_bars: 1, diameter: 16}
-    - {x: 270, y: 250, As: 201.06, material: B450C, n_bars: 1, diameter: 16}
-    - {x: 270, y: 470, As: 201.06, material: B450C, n_bars: 1, diameter: 16}
+    - {x: 30, y: 30,   As: 201.06, material: B450C, n_bars: 1, diameter: 8}
+    - {x: 30, y: 250,  As: 201.06, material: B450C, n_bars: 1, diameter: 8}
+    - {x: 30, y: 470,  As: 201.06, material: B450C, n_bars: 1, diameter: 8}
+    - {x: 270, y: 30,  As: 201.06, material: B450C, n_bars: 1, diameter: 8}
+    - {x: 270, y: 250, As: 201.06, material: B450C, n_bars: 1, diameter: 8}
+    - {x: 270, y: 470, As: 201.06, material: B450C, n_bars: 1, diameter: 8}
 
 demands:
   - name: Test_1

@@ -1,0 +1,12 @@
+{% if versions %}
+<div class="version-switcher">
+  <label for="version-select"><strong>Version</strong></label>
+  <select id="version-select" onchange="if(this.value) window.location.href=this.value;">
+    {% for version in versions %}
+      <option value="{{ version.url }}"{% if version.name == current_version.name %} selected{% endif %}>
+        {{ version.name }}
+      </option>
+    {% endfor %}
+  </select>
+</div>
+{% endif %}
