@@ -324,7 +324,7 @@ def load_yaml(filepath):
             rebars=rebars,
             n_fibers_y=int(sec_spec.get("n_fibers_y",
                             sec_spec.get("n_fibers", 100))),
-            n_fibers_x=int(sec_spec.get("n_fibers_x", 1)),
+            n_fibers_x=int(sec_spec.get("n_fibers_x", 100)),
         )
 
     # ---- Demands ----
@@ -605,5 +605,12 @@ def _parse_output_flags(output_spec):
     flags.setdefault("generate_mx_my", False)
     flags.setdefault("generate_3d_surface", False)
     flags.setdefault("n_angles_mx_my", 144)
+
+    # Moment-curvature and ductility generation defaults.
+    # These can be expensive, especially for biaxial sections with
+    # many N levels; default to True for backward compatibility.
+    flags.setdefault("generate_moment_curvature", False)
+    flags.setdefault("generate_polar_ductility", False)
+    flags.setdefault("generate_3d_moment_curvature", False)
 
     return flags
