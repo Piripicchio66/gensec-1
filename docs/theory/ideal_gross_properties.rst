@@ -8,14 +8,15 @@ This page documents the output produced by the ``geometry``
 sub-package when querying the geometric properties of a
 :class:`~gensec.geometry.geometry.GenericSection`.  All quantities
 are computed on the **homogenized section** (sometimes called
-*ideal* or *transformed* section in English, *sezione ideale* /
-*omogeneizzata* in Italian).  Mono-material sections are the
+*ideal* or *transformed* section).  Mono-material sections are the
 natural degenerate case.
 
-
-.. contents::
-   :local:
-   :depth: 2
+.. note::
+    Properties of this section are evaluated in the **elastic** regime, 
+    so no cracking or any other phenomena is accounted for.
+    For ELS and ULS verifications, the non-linear solver must 
+    be used to compute the actual response of the section under 
+    the applied loads.
 
 
 Homogenization convention

@@ -544,7 +544,7 @@ def compute_section_properties(
     rebars: Optional[Sequence[HomogenizedRebar]] = None,
     E_bulk: float = 1.0,
     E_ref: Optional[float] = None,
-    compute_plastic: bool = True,
+    compute_plastic: bool = False,
 ) -> SectionProperties:
     r"""
     Compute the homogenized geometric properties of a section.
@@ -569,7 +569,7 @@ def compute_section_properties(
     E_ref : float or None, optional
         Reference modulus.  If ``None``, defaults to ``E_bulk``.
     compute_plastic : bool, optional
-        Whether to compute the plastic moduli.  Default ``True``.
+        Whether to compute the plastic moduli.  Default ``False``.
 
     Returns
     -------

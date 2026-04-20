@@ -430,6 +430,11 @@ class NMDiagram:
     #  Biaxial 3-D surface (mega-batch)
     # ==================================================================
 
+    ### TODO: check if we can get lower values of n_points_per_angle for 
+    ### the same quality.
+    ### Check also the consistency of 72 n_angles and default 144 n_angles.
+    ### Can we do an optimization here with vectorization across angles?
+
     def generate_biaxial(self, n_angles=72, n_points_per_angle=200):
         r"""
         Generate the 3D resistance surface (N, Mx, My).

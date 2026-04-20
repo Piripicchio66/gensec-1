@@ -707,7 +707,10 @@ class FiberSolver:
         Returns
         -------
         eps0, chi_x, chi_y : float
+        
         """
+        ### TODO: we should use ideal gross section properties here, 
+        ### to get a more accurate initial guess. 
         try:
             _, _, _, K0 = self.integrate_with_tangent(0.0, 0.0, 0.0)
             target = np.array([N_target, Mx_target, My_target])
@@ -720,7 +723,9 @@ class FiberSolver:
             sec = self.sec
             A_ideal_gross = getattr(sec, 'ideal_gross_area', sec.B * sec.H)
             I_approx = A_ideal_gross * sec.H**2 / 12
+            ### TODO: substitute 30000 with real bulk base modulus of the section
             eps0_est = N_target / (A_ideal_gross * 30000)
+            ### TODO: substitute 30000 with real bulk base modulus of the section
             chi_x_est = (Mx_target / (30000 * I_approx)
                          if I_approx > 0 else 1e-6)
             return float(eps0_est), float(chi_x_est), 0.0

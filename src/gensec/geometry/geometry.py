@@ -542,6 +542,11 @@ class GenericSection:
         """
         return self._bounds
 
+    ### TODO: we should add support for multi-staged sections,
+    ### where the ideal_gross properties are dependent from the time
+    ### of construction or load application. At the moment, the property
+    ### is computed lazily and cached, but it assumes a immutable section. 
+    ### If the section geometry or materials change, the cache should be invalidated.
     @property
     def ideal_gross_properties(self):
         """Lazy-computed homogenized section properties."""
@@ -554,11 +559,19 @@ class GenericSection:
                 for r in self.rebars
                 if r.embedded and r.x is not None
             ]
-            self._ideal_gross_props_cache = compute_section_properties(
-                self.polygon,
-                rebars=homog,
-                E_bulk=self.bulk_material.E,
-            )
+            ### TODO: add support for multi-material bulk zones here (currently ignored in homogenization)
+            if len(self.bulk_materials) > 1:
+                self._ideal_gross_props_cache = None  # placeholder to avoid repeated warnings
+                raise NotImplementedError(
+                    "Warning: ideal_gross_properties currently ignores "
+                    "multi-material bulk zones."
+                )
+            else:
+                self._ideal_gross_props_cache = compute_section_properties(
+                    self.polygon,
+                    rebars=homog,
+                    E_bulk=self.bulk_material.E,
+                )
         return self._ideal_gross_props_cache
 
     # ------------------------------------------------------------------

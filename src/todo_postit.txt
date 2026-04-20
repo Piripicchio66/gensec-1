@@ -1,0 +1,1 @@
+- outputs should be placed in csv, json and png folders, not all in the same one.

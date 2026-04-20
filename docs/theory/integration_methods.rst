@@ -24,11 +24,6 @@ This page documents the two methods, their accuracy, their cost,
 and the reasons they are not mixed.
 
 
-.. contents::
-   :local:
-   :depth: 2
-
-
 The polygonal method (Green's theorem)
 ======================================
 
