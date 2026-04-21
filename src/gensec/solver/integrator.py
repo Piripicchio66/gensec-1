@@ -707,7 +707,10 @@ class FiberSolver:
         Returns
         -------
         eps0, chi_x, chi_y : float
+        
         """
+        ### TODO: we should use ideal gross section properties here, 
+        ### to get a more accurate initial guess. 
         try:
             _, _, _, K0 = self.integrate_with_tangent(0.0, 0.0, 0.0)
             target = np.array([N_target, Mx_target, My_target])
@@ -718,9 +721,11 @@ class FiberSolver:
             return float(x0[0]), float(x0[1]), float(x0[2])
         except np.linalg.LinAlgError:
             sec = self.sec
-            A_gross = getattr(sec, 'gross_area', sec.B * sec.H)
-            I_approx = A_gross * sec.H**2 / 12
-            eps0_est = N_target / (A_gross * 30000)
+            A_ideal_gross = getattr(sec, 'ideal_gross_area', sec.B * sec.H)
+            I_approx = A_ideal_gross * sec.H**2 / 12
+            ### TODO: substitute 30000 with real bulk base modulus of the section
+            eps0_est = N_target / (A_ideal_gross * 30000)
+            ### TODO: substitute 30000 with real bulk base modulus of the section
             chi_x_est = (Mx_target / (30000 * I_approx)
                          if I_approx > 0 else 1e-6)
             return float(eps0_est), float(chi_x_est), 0.0
@@ -974,7 +979,7 @@ class FiberSolver:
             ``'bulk'``: sub-dict with ``x``, ``y``, ``eps``,
             ``sigma``, ``dA``.
             ``'rebars'``: sub-dict with ``x``, ``y``, ``eps``,
-            ``sigma`` (gross), ``sigma_net`` (net after bulk
+            ``sigma`` (ideal_gross), ``sigma_net`` (net after bulk
             subtraction), ``A``, ``embedded``.
         """
         eb, er = self.strain_field(eps0, chi_x, chi_y)
@@ -988,13 +993,13 @@ class FiberSolver:
                 sb[idx] = mat.stress_array(eb[idx])
 
         # Rebar stresses
-        sr_gross = np.zeros_like(er)
+        sr_ideal_gross = np.zeros_like(er)
         for mat, idx in self._rebar_groups:
-            sr_gross[idx] = mat.stress_array(er[idx])
+            sr_ideal_gross[idx] = mat.stress_array(er[idx])
 
         # Net rebar stress (subtract bulk at rebar location)
         sb_at_rebars = self.sec.bulk_material.stress_array(er)
-        sr_net = sr_gross.copy()
+        sr_net = sr_ideal_gross.copy()
         emb = self.sec.embedded_rebars
         sr_net[emb] -= sb_at_rebars[emb]
 
@@ -1010,7 +1015,7 @@ class FiberSolver:
                 "x": self.sec.x_rebars.copy(),
                 "y": self.sec.y_rebars.copy(),
                 "eps": er.copy(),
-                "sigma": sr_gross.copy(),
+                "sigma": sr_ideal_gross.copy(),
                 "sigma_net": sr_net.copy(),
                 "A": self.sec.A_rebars.copy(),
                 "embedded": self.sec.embedded_rebars.copy(),

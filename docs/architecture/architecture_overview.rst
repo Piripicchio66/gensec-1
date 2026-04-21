@@ -12,9 +12,6 @@ No prior software engineering knowledge is required beyond a basic
 familiarity with the concept of *functions* and *objects* (containers
 that group data and operations together).
 
-.. contents:: On this page
-   :local:
-   :depth: 2
 
 
 What GenSec does
@@ -263,4 +260,4 @@ section's bounding box:
 - :math:`x` axis: horizontal (width direction).
 - :math:`y` axis: vertical (height direction, upward).
 - Reference point for moments: the **geometric centroid** of the
-  gross section (computed from the polygon, not from the bounding box).
+  ideal_gross section (computed from the polygon, not from the bounding box).

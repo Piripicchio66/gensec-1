@@ -430,6 +430,11 @@ class NMDiagram:
     #  Biaxial 3-D surface (mega-batch)
     # ==================================================================
 
+    ### TODO: check if we can get lower values of n_points_per_angle for 
+    ### the same quality.
+    ### Check also the consistency of 72 n_angles and default 144 n_angles.
+    ### Can we do an optimization here with vectorization across angles?
+
     def generate_biaxial(self, n_angles=72, n_points_per_angle=200):
         r"""
         Generate the 3D resistance surface (N, Mx, My).
@@ -722,8 +727,8 @@ class NMDiagram:
 
         # Initial eps0 estimate
         if abs(chi_start) < 1e-15:
-            A_gross = getattr(sec, 'gross_area', sec.B * sec.H)
-            eps0_guess = N_fixed / (A_gross * 15000)
+            A_ideal_gross = getattr(sec, 'ideal_gross_area', sec.B * sec.H)
+            eps0_guess = N_fixed / (A_ideal_gross * 15000)
             eps0_guess = np.clip(eps0_guess, emb, -emb)
         else:
             eps0_guess = 0.0

@@ -19,7 +19,7 @@ materials:
 section:
   B: 600
   H: 600
-  bulk_material: concrete_directuv
+  bulk_material: concrete_direct
   n_fibers_y: 40
   n_fibers_x: 40
   rebars:
@@ -48,8 +48,25 @@ demands:
   
 
 output:
-  eta_3D: true
-  eta_2D: true
-  generate_mx_my: true
-  generate_3d_surface: true
-  n_angles_mx_my: 144
+  
+  # ── Utilization ratio flags ──
+  eta_3D: true             # default: true
+  eta_2D: true             # default: false
+  eta_path: false           # default: true
+  eta_path_2D: false        # default: false
+  delta_N_tol: 0.03        # default: 0.03 (3%)
+
+  # ── Domain generation ──
+  generate_mx_my: false     # Mx-My contour plots (default: false)
+  generate_3d_surface: false # 3D surface CSV/JSON/plot (default: false)
+  n_angles_mx_my: 288 #144      # angular resolution for Mx-My (default: 144)
+
+  # ── Moment-curvature and ductility ──
+  generate_moment_curvature: true     # M-χ diagrams per N level (default: true)
+  generate_polar_ductility: false      # polar ductility plot (default: true)
+  generate_3d_moment_curvature: false  # 3D M-χ-N surface (default: true)
+
+  # ── N-level strategy ──
+  n_levels_mode: demands
+  # n_levels_count: 10
+  # n_levels_values: [-3000, -1500, 0]
