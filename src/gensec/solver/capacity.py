@@ -839,33 +839,37 @@ class NMDiagram:
     # ==================================================================
 
     def generate_mx_my(self, N_fixed, n_angles=72,
-                       n_points_per_angle=200):
+                       n_points_per_angle=200, n_chi=50):
         r"""
         Generate the Mx-My interaction contour at a fixed axial force.
 
-        For a given :math:`N`, scans curvature directions
-        :math:`\theta \in [0, 2\pi)`. For each direction, sweeps
-        through strain configurations, collects all (N, Mx, My)
-        points, and **interpolates** at :math:`N = N_{\text{fixed}}`
-        to find the moment point on the contour.
+        Algorithm:
 
-        All directions are integrated in **chunked mega-batches**
-        for maximum throughput.
+        1. For each curvature direction :math:`\theta \in [0, 2\pi)`,
+           sweeps curvature magnitude :math:`\chi` and solves
+           :math:`\varepsilon_0` via vectorized Newton so that
+           :math:`N = N_{\text{fixed}}`.
+        2. Collects **all** converged :math:`(M_x, M_y)` points
+           across all angles and curvatures.
+        3. Builds the 2-D convex hull of the converged cloud.
+        4. Resamples the hull boundary at ``n_angles`` evenly-spaced
+           angular positions to produce a smooth, closed contour
+           with exactly ``n_angles`` points.
 
-        The algorithm returns exactly ``n_angles`` points — one
-        per curvature direction — by picking the N-crossing with
-        the largest moment magnitude at each angle.  If no valid
-        N-crossing is found for a direction, that point is set to
-        ``NaN`` and a warning is issued.
+        This approach guarantees that the contour is the true
+        outer boundary of the capacity at :math:`N_{\text{fixed}}`,
+        not limited to a single "best" point per angle.
 
         Parameters
         ----------
         N_fixed : float
             Fixed axial force [N].
         n_angles : int, optional
-            Number of curvature directions. Default 72 (every 5°).
+            Number of output contour points. Default 72.
         n_points_per_angle : int, optional
-            Strain scan resolution per direction. Default 200.
+            Kept for API compatibility; not used internally.
+        n_chi : int, optional
+            Curvature magnitudes per direction. Default 50.
 
         Returns
         -------
@@ -876,70 +880,124 @@ class NMDiagram:
         Raises
         ------
         ValueError
-            If *n_angles* or *n_points_per_angle* < 1, or *N_fixed*
-            is not finite.
+            If *n_angles* < 1 or *N_fixed* is not finite.
 
         Warnings
         --------
         RuntimeWarning
-            If one or more curvature directions yield no valid
-            N-crossing.  The corresponding contour point is ``NaN``.
+            If fewer than 3 points converge (cannot build hull).
         """
+        from scipy.spatial import ConvexHull, QhullError
+
         self._validate_finite_float(N_fixed, "N_fixed")
         self._validate_positive_int(n_angles, "n_angles")
-        self._validate_positive_int(n_points_per_angle,
-                                    "n_points_per_angle")
 
-        thetas = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
-        ebot, etop = self._build_edge_template_mx_my(
-            n_points_per_angle)
-        angle_params = self._compute_angle_params(
-            thetas, self._all_lx, self._all_ly)
+        all_lx = self._all_lx
+        all_ly = self._all_ly
 
-        per_angle = self._mega_batch_integrate(
-            ebot, etop, angle_params)
+        # Scan 2× the requested angles internally for dense coverage.
+        n_scan = max(n_angles, 72)
+        thetas = np.linspace(0, 2 * np.pi, n_scan, endpoint=False)
 
-        # Post-process: find N-crossings per angle.
-        # Each angle yields exactly one (Mx, My) point — the
-        # N-crossing with the largest resultant moment.
-        Mxl, Myl = [], []
-        n_failed = 0
-        for pN, pMx, pMy in per_angle:
-            best_Mx = np.nan
-            best_My = np.nan
-            best_M_mag = -1.0
+        chi_x_parts = []
+        chi_y_parts = []
 
-            for k in range(len(pN) - 1):
-                N_a, N_b = pN[k], pN[k + 1]
-                if ((N_a - N_fixed) * (N_b - N_fixed) <= 0
-                        and abs(N_b - N_a) > 1e-6):
-                    t = (N_fixed - N_a) / (N_b - N_a)
-                    Mx_interp = pMx[k] + t * (pMx[k + 1] - pMx[k])
-                    My_interp = pMy[k] + t * (pMy[k + 1] - pMy[k])
-                    M_mag = np.sqrt(Mx_interp**2 + My_interp**2)
-                    if M_mag > best_M_mag:
-                        best_M_mag = M_mag
-                        best_Mx = Mx_interp
-                        best_My = My_interp
+        for theta in thetas:
+            cos_t = np.cos(theta)
+            sin_t = np.sin(theta)
+            chi_max, span, _ = self._chi_max_for_direction(
+                cos_t, sin_t, all_lx, all_ly)
+            if chi_max < 1e-15:
+                continue
+            chis = np.linspace(chi_max / n_chi, chi_max, n_chi)
+            chi_x_parts.append(chis * cos_t)
+            chi_y_parts.append(chis * sin_t)
 
-            if best_M_mag < 0:
-                n_failed += 1
-
-            Mxl.append(best_Mx)
-            Myl.append(best_My)
-
-        if n_failed > 0:
+        if len(chi_x_parts) == 0:
+            Mxa = np.full(n_angles, np.nan)
+            Mya = np.full(n_angles, np.nan)
             warnings.warn(
-                f"generate_mx_my: {n_failed}/{len(per_angle)} "
-                f"curvature directions found no valid N-crossing at "
-                f"N_fixed={N_fixed / 1e3:.1f} kN.  "
-                f"Corresponding contour points are NaN.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+                "generate_mx_my: all curvature directions degenerate.",
+                RuntimeWarning, stacklevel=2)
+            return {
+                "Mx": Mxa, "My": Mya,
+                "Mx_kNm": Mxa / 1e6, "My_kNm": Mya / 1e6,
+                "N_fixed_kN": N_fixed / 1e3,
+            }
 
-        Mxa = np.array(Mxl)
-        Mya = np.array(Myl)
+        all_chi_x = np.concatenate(chi_x_parts)
+        all_chi_y = np.concatenate(chi_y_parts)
+
+        # Vectorized Newton: solve eps0 for all configs at once.
+        _, N_arr, Mx_arr, My_arr = self._vectorized_solve_N(
+            N_fixed, all_chi_x, all_chi_y)
+
+        # Filter converged points.
+        conv = np.abs(N_arr - N_fixed) < 1e3
+        Mx_conv = Mx_arr[conv]
+        My_conv = My_arr[conv]
+
+        if len(Mx_conv) < 3:
+            Mxa = np.full(n_angles, np.nan)
+            Mya = np.full(n_angles, np.nan)
+            warnings.warn(
+                f"generate_mx_my: only {len(Mx_conv)} converged "
+                f"points at N={N_fixed / 1e3:.1f} kN (need >= 3).",
+                RuntimeWarning, stacklevel=2)
+            return {
+                "Mx": Mxa, "My": Mya,
+                "Mx_kNm": Mxa / 1e6, "My_kNm": Mya / 1e6,
+                "N_fixed_kN": N_fixed / 1e3,
+            }
+
+        # Build convex hull of converged cloud.
+        pts = np.column_stack([Mx_conv, My_conv])
+        try:
+            hull = ConvexHull(pts)
+        except QhullError:
+            Mxa = np.full(n_angles, np.nan)
+            Mya = np.full(n_angles, np.nan)
+            warnings.warn(
+                f"generate_mx_my: degenerate hull at "
+                f"N={N_fixed / 1e3:.1f} kN.",
+                RuntimeWarning, stacklevel=2)
+            return {
+                "Mx": Mxa, "My": Mya,
+                "Mx_kNm": Mxa / 1e6, "My_kNm": Mya / 1e6,
+                "N_fixed_kN": N_fixed / 1e3,
+            }
+
+        # Extract ordered hull boundary (closed polygon).
+        hv = hull.vertices
+        hull_Mx = pts[hv, 0]
+        hull_My = pts[hv, 1]
+
+        # Centroid for angular parameterization.
+        cx = hull_Mx.mean()
+        cy = hull_My.mean()
+
+        # Compute angle of each hull vertex from centroid.
+        angles_hull = np.arctan2(hull_My - cy, hull_Mx - cx)
+        order = np.argsort(angles_hull)
+        hull_Mx = hull_Mx[order]
+        hull_My = hull_My[order]
+        angles_hull = angles_hull[order]
+
+        # Close the polygon.
+        hull_Mx = np.append(hull_Mx, hull_Mx[0])
+        hull_My = np.append(hull_My, hull_My[0])
+        angles_hull = np.append(angles_hull,
+                                angles_hull[0] + 2 * np.pi)
+
+        # Resample at n_angles evenly-spaced angular positions.
+        target_angles = np.linspace(
+            angles_hull[0], angles_hull[0] + 2 * np.pi,
+            n_angles, endpoint=False)
+
+        Mxa = np.interp(target_angles, angles_hull, hull_Mx,
+                         period=2 * np.pi)
+        Mya = np.interp(target_angles, angles_hull, hull_My,
+                         period=2 * np.pi)
 
         return {
             "Mx": Mxa, "My": Mya,

@@ -416,7 +416,7 @@ def plot_section_properties(sec, props=None, *,
     xmin, xmax = ax.get_xlim()
     ymin, ymax = ax.get_ylim()
     limits = (1.2*xmin, 1.2*xmax, 1.2*ymin, 1.2*ymax) ### TODO: check the x1.2 factor
-    ax.set_aspect('auto') ###TODO: Check this
+    ax.set_aspect(1.2) ###TODO: Check this
 
     xg, yg = props.xg, props.yg
     alpha = props.alpha

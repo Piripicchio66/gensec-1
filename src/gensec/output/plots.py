@@ -35,6 +35,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import PathPatch, Circle, Rectangle
 from matplotlib.path import Path
 from matplotlib.colors import TwoSlopeNorm, Normalize
+from matplotlib.ticker import FuncFormatter
 from scipy.spatial import ConvexHull
 
 
@@ -928,7 +929,8 @@ def plot_3d_surface(nm_3d, demands=None, title="",
 
     By default, the plot uses `set_box_aspect` to maintain proportional axes.
     If `set_box_aspect` triggers a warning (e.g., incompatible with tight_layout),
-    the function falls back to normalized axes **automatically**.
+    the function falls back to normalized axes and uses `FuncFormatter` to
+    display the original tick values.
 
     Parameters
     ----------
@@ -955,31 +957,25 @@ def plot_3d_surface(nm_3d, demands=None, title="",
     Mx_all = nm_3d["Mx_kNm"]
     My_all = nm_3d["My_kNm"]
 
-    # --- Check if we need to normalize (fallback) ---
-    # We'll set this flag if set_box_aspect fails
+    # Flag to check if we need to use normalized axes (fallback)
     use_normalized = False
 
-    # --- First, try to plot with proportional axes ---
-    # Create a copy of the data for the first attempt
-    Mx_plot = Mx_all.copy()
-    My_plot = My_all.copy()
-
-    # --- Build the plot ---
-    pts = np.column_stack([Mx_plot, My_plot, N_all])
+    # Build the point cloud for the convex hull
+    pts = np.column_stack([Mx_all, My_all, N_all])
     N_min, N_max = N_all.min(), N_all.max()
     cmap = plt.cm.RdYlBu_r
     norm_c = Normalize(vmin=N_min, vmax=N_max)
 
-    # --- Build structured surface from hull contour slices ---
-    hull = ConvexHull(pts)
+    # Generate N levels for contour slicing
     N_levels = np.linspace(N_min * 0.98, N_max * 0.98, n_levels)
 
-    # First pass: collect raw contours
+    # --- First pass: collect raw contours ---
     raw_contours = []
     raw_N = []
     max_area = 0.0
     ref_cx, ref_cy = 0.0, 0.0
 
+    hull = ConvexHull(pts)
     for nl in N_levels:
         contour = _hull_slice_at_N(pts, hull.simplices, nl)
         if contour is None or len(contour) < 4:
@@ -996,7 +992,7 @@ def plot_3d_surface(nm_3d, demands=None, title="",
             ref_cx = contour[:, 0].mean()
             ref_cy = contour[:, 1].mean()
 
-    # Second pass: resample all contours
+    # --- Second pass: resample all contours ---
     grid_Mx = []
     grid_My = []
     grid_N = []
@@ -1013,15 +1009,15 @@ def plot_3d_surface(nm_3d, demands=None, title="",
     if len(grid_Mx) < 3:
         # Fallback: scatter plot if not enough contours
         fig, ax = plt.subplots(1, 1, figsize=(10, 8), subplot_kw={'projection': '3d'})
-        ax.scatter(Mx_plot, My_plot, N_all, s=1, alpha=0.3, c='blue')
+        ax.scatter(Mx_all, My_all, N_all, s=1, alpha=0.3, c='blue')
         ax.set_xlabel("Mx [kN·m]")
         ax.set_ylabel("My [kN·m]")
         ax.set_zlabel("N [kN]")
         ax.set_title(title or "3D Resistance Surface (fallback)")
-        fig.constrained_layout()
-        #fig.tight_layout()
+        fig.tight_layout()
         return fig
 
+    # Convert to numpy arrays
     GMx = np.array(grid_Mx)
     GMy = np.array(grid_My)
     GN = np.array(grid_N)
@@ -1041,7 +1037,12 @@ def plot_3d_surface(nm_3d, demands=None, title="",
         ax = fig.add_subplot(1, 2, idx, projection='3d')
 
         # Plot the surface and contours
-        ax.plot_surface(GMx, GMy, GN, facecolors=face_colors, rstride=1, cstride=1, shade=False, alpha=0.55, antialiased=True)
+        ax.plot_surface(
+            GMx, GMy, GN,
+            facecolors=face_colors,
+            rstride=1, cstride=1,
+            shade=False, alpha=0.55, antialiased=True
+        )
         for i in range(len(valid_levels)):
             ax.plot(GMx[i], GMy[i], GN[i], color='#333333', lw=0.4, alpha=0.5)
         for j in meridian_idx:
@@ -1053,8 +1054,16 @@ def plot_3d_surface(nm_3d, demands=None, title="",
                 n_d = d["N"] / 1e3
                 mx_d = d["Mx"] / 1e6
                 my_d = d.get("My", 0) / 1e6
-                ax.scatter([mx_d], [my_d], [n_d], c='red', s=80, zorder=10, depthshade=False, edgecolors='darkred', linewidths=0.8)
-                ax.text(mx_d, my_d, n_d, f"  {d['name']}", fontsize=9, color='darkred', fontweight='bold')
+                ax.scatter(
+                    [mx_d], [my_d], [n_d],
+                    c='red', s=80, zorder=10,
+                    depthshade=False, edgecolors='darkred', linewidths=0.8
+                )
+                ax.text(
+                    mx_d, my_d, n_d,
+                    f"  {d['name']}",
+                    fontsize=9, color='darkred', fontweight='bold'
+                )
 
         ax.set_xlabel("Mx [kN·m]", fontsize=9, labelpad=12)
         ax.set_ylabel("My [kN·m]", fontsize=9, labelpad=12)
@@ -1065,32 +1074,27 @@ def plot_3d_surface(nm_3d, demands=None, title="",
         ax.tick_params(axis='x', labelsize=8)
         ax.tick_params(axis='z', labelsize=8)
 
-
-        dx = GMx.max() - GMx.min() 
+        # Check if aspect ratio is too extreme
+        dx = GMx.max() - GMx.min()
         dy = GMy.max() - GMy.min()
-
-        if max(dx,dy) / min(dx,dy) < 5:
-            ax.set_box_aspect([GMx.max() - GMx.min(), GMy.max() - GMy.min(), GN.max() - GN.min()])
-        else:
-            print(f"Falling back to normalized axes.")
+        if max(dx, dy) / min(dx, dy) > 5:
+            print("Aspect ratio too extreme. Falling back to normalized axes.")
             use_normalized = True
-            break  # Exit the loop and replot with normalized axes
+            break
 
-    # --- If set_box_aspect failed, replot with normalized axes ---
+    # --- If set_box_aspect failed, replot with normalized axes and formatted ticks ---
     if use_normalized:
-        print("Replotting with normalized axes.")
-        fig.clf()  # Clear the current figure
-        plt.close(fig)  # Close the old figure
+        print("Replotting with normalized axes and original tick values.")
+        fig.clf()
+        plt.close(fig)
 
-        # Normalize Mx and My
+        # Normalize Mx and My to [0, 1]
         Mx_min, Mx_max = Mx_all.min(), Mx_all.max()
         My_min, My_max = My_all.min(), My_all.max()
-        global_min = min(Mx_min, My_min)
-        global_max = max(Mx_max, My_max)
-        Mx_norm = (Mx_all - Mx_min) / (Mx_max - Mx_min) * (global_max - global_min) + global_min
-        My_norm = (My_all - My_min) / (My_max - My_min) * (global_max - global_min) + global_min
+        Mx_norm = (Mx_all - Mx_min) / (Mx_max - Mx_min)
+        My_norm = (My_all - My_min) / (My_max - My_min)
 
-        # Rebuild the plot with normalized data
+        # Rebuild the point cloud with normalized data
         pts_norm = np.column_stack([Mx_norm, My_norm, N_all])
         hull_norm = ConvexHull(pts_norm)
 
@@ -1134,13 +1138,14 @@ def plot_3d_surface(nm_3d, demands=None, title="",
             # Fallback: scatter plot if not enough contours
             fig, ax = plt.subplots(1, 1, figsize=(10, 8), subplot_kw={'projection': '3d'})
             ax.scatter(Mx_norm, My_norm, N_all, s=1, alpha=0.3, c='blue')
-            ax.set_xlabel("Mx [kN·m] (normalized)")
-            ax.set_ylabel("My [kN·m] (normalized)")
+            ax.set_xlabel("Mx [kN·m]")
+            ax.set_ylabel("My [kN·m]")
             ax.set_zlabel("N [kN]")
             ax.set_title(title or "3D Resistance Surface (fallback, normalized)")
             fig.tight_layout()
             return fig
 
+        # Convert to numpy arrays
         GMx_norm = np.array(grid_Mx_norm)
         GMy_norm = np.array(grid_My_norm)
         GN_norm = np.array(grid_N_norm)
@@ -1151,31 +1156,55 @@ def plot_3d_surface(nm_3d, demands=None, title="",
         for idx, elev, azim, vtitle in views:
             ax = fig.add_subplot(1, 2, idx, projection='3d')
 
-            ax.plot_surface(GMx_norm, GMy_norm, GN_norm, facecolors=face_colors_norm, rstride=1, cstride=1, shade=False, alpha=0.55, antialiased=True)
+            # Plot surface and contours
+            ax.plot_surface(
+                GMx_norm, GMy_norm, GN_norm,
+                facecolors=face_colors_norm,
+                rstride=1, cstride=1,
+                shade=False, alpha=0.55, antialiased=True
+            )
             for i in range(len(valid_levels_norm)):
                 ax.plot(GMx_norm[i], GMy_norm[i], GN_norm[i], color='#333333', lw=0.4, alpha=0.5)
             for j in meridian_idx:
                 ax.plot(GMx_norm[:, j], GMy_norm[:, j], GN_norm[:, j], color='#555555', lw=0.3, alpha=0.4)
 
+            # Plot demand points (normalized)
             if demands:
                 for d in demands:
                     n_d = d["N"] / 1e3
                     mx_d = d["Mx"] / 1e6
                     my_d = d.get("My", 0) / 1e6
-                    # Normalize demand points
-                    mx_d_norm = (mx_d - Mx_min) / (Mx_max - Mx_min) * (global_max - global_min) + global_min
-                    my_d_norm = (my_d - My_min) / (My_max - My_min) * (global_max - global_min) + global_min
-                    ax.scatter([mx_d_norm], [my_d_norm], [n_d], c='red', s=80, zorder=10, depthshade=False, edgecolors='darkred', linewidths=0.8)
-                    ax.text(mx_d_norm, my_d_norm, n_d, f"  {d['name']}", fontsize=9, color='darkred', fontweight='bold')
+                    mx_d_norm = (mx_d - Mx_min) / (Mx_max - Mx_min)
+                    my_d_norm = (my_d - My_min) / (My_max - My_min)
+                    ax.scatter(
+                        [mx_d_norm], [my_d_norm], [n_d],
+                        c='red', s=80, zorder=10,
+                        depthshade=False, edgecolors='darkred', linewidths=0.8
+                    )
+                    ax.text(
+                        mx_d_norm, my_d_norm, n_d,
+                        f"  {d['name']}",
+                        fontsize=9, color='darkred', fontweight='bold'
+                    )
 
-            ax.set_xlabel("Mx [kN·m] (normalized)", fontsize=9, labelpad=12)
-            ax.set_ylabel("My [kN·m] (normalized)", fontsize=9, labelpad=12)
+            # Set axis labels
+            ax.set_xlabel("Mx [kN·m]", fontsize=9, labelpad=12)
+            ax.set_ylabel("My [kN·m]", fontsize=9, labelpad=12)
             ax.set_zlabel("N [kN]", fontsize=9, labelpad=12)
-            ax.set_title(vtitle + " (normalized)", fontsize=11)
+            ax.set_title(vtitle, fontsize=11)
             ax.view_init(elev=elev, azim=azim)
             ax.tick_params(axis='y', labelrotation=45, labelsize=8)
             ax.tick_params(axis='x', labelsize=8)
             ax.tick_params(axis='z', labelsize=8)
+
+            # --- Format ticks to show original values ---
+            def format_x(x, pos):
+                return f"{x * (Mx_max - Mx_min) + Mx_min:.1f}"
+            def format_y(y, pos):
+                return f"{y * (My_max - My_min) + My_min:.1f}"
+
+            ax.xaxis.set_major_formatter(FuncFormatter(format_x))
+            ax.yaxis.set_major_formatter(FuncFormatter(format_y))
 
     # --- Add colorbar ---
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm_c)
