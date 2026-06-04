@@ -34,7 +34,7 @@ Heavy objects (parsed section, fiber solver, 3D resistance hull,
 verification results) are memoised in-memory keyed on the SHA-256 hash
 of the *normalised* YAML text.  Any meaningful change to the YAML
 invalidates the cache automatically; whitespace, comments and key order
-do not.  Cache size is bounded by ``SECTION_CACHE_SIZE`` (default 32).
+do not.  Cache size is bounded by ``SECTION_CACHE_SIZE`` (default 4).
 
 Examples
 --------
@@ -49,6 +49,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import math
 import os
 import tempfile
 import time
@@ -64,8 +65,13 @@ from pydantic import BaseModel, Field
 # Configuration
 # ---------------------------------------------------------------------------
 
-SECTION_CACHE_SIZE: int = 32
-"""Maximum number of distinct sections held in the in-memory cache."""
+SECTION_CACHE_SIZE: int = 4
+"""Maximum number of distinct sections held in the in-memory cache.
+
+Reduced from 32 to 4 to limit resident memory in the GUI server
+context.  The N-slider reuses the cached session; holding dozens
+of unrelated sessions simultaneously is unnecessary.
+"""
 
 #__version__ = "0.3.0"
 
@@ -210,6 +216,85 @@ class PlotImageResponse(BaseModel):
     meta: Meta
 
 
+class SectionPropertiesPayload(BaseModel):
+    r"""Homogenized (ideal) section properties, JSON-safe.
+
+    Mirrors :class:`gensec.properties.SectionProperties` field-for-field,
+    but every quantity is ``Optional`` so non-finite values serialise as
+    ``null`` rather than invalid JSON: the plastic moduli are
+    :math:`\mathrm{NaN}` when ``compute_plastic=False``, and an elastic
+    modulus :math:`W = I / c` is :math:`+\infty` when the extreme-fiber
+    distance :math:`c` is zero.  See
+    :class:`~gensec.properties.SectionProperties` for the full definition
+    and units (mm-based) of each field.
+    """
+    # Homogenization
+    E_ref: Optional[float] = None
+    E_bulk: Optional[float] = None
+    n_bulk: Optional[float] = None
+    # Area and centroid
+    area: Optional[float] = None
+    Sx: Optional[float] = None
+    Sy: Optional[float] = None
+    xg: Optional[float] = None
+    yg: Optional[float] = None
+    # Second moments
+    Ixx_o: Optional[float] = None
+    Iyy_o: Optional[float] = None
+    Ixy_o: Optional[float] = None
+    Ix: Optional[float] = None
+    Iy: Optional[float] = None
+    Ixy: Optional[float] = None
+    I_xi: Optional[float] = None
+    I_eta: Optional[float] = None
+    alpha: Optional[float] = None
+    # Derived
+    rho_x: Optional[float] = None
+    rho_y: Optional[float] = None
+    rho_xi: Optional[float] = None
+    rho_eta: Optional[float] = None
+    I_polar: Optional[float] = None
+    is_convex: Optional[bool] = None
+    # Extreme-fiber distances
+    c_y_top: Optional[float] = None
+    c_y_bot: Optional[float] = None
+    c_x_left: Optional[float] = None
+    c_x_right: Optional[float] = None
+    c_xi_pos: Optional[float] = None
+    c_xi_neg: Optional[float] = None
+    c_eta_pos: Optional[float] = None
+    c_eta_neg: Optional[float] = None
+    # Elastic section moduli
+    W_x_top: Optional[float] = None
+    W_x_bot: Optional[float] = None
+    W_y_left: Optional[float] = None
+    W_y_right: Optional[float] = None
+    W_xi_pos: Optional[float] = None
+    W_xi_neg: Optional[float] = None
+    W_eta_pos: Optional[float] = None
+    W_eta_neg: Optional[float] = None
+    # Plastic section moduli
+    Z_x: Optional[float] = None
+    Z_y: Optional[float] = None
+    Z_xi: Optional[float] = None
+    Z_eta: Optional[float] = None
+    # Torsional constant (placeholder)
+    I_t: Optional[float] = None
+
+
+class InspectResult(BaseModel):
+    """Payload returned by :func:`inspect`: parse + section properties only.
+
+    No solver, no resistance domain, no verification.  ``properties`` is
+    ``None`` when it could not be computed (e.g. multi-material bulk),
+    in which case ``meta.warnings`` explains why.
+    """
+    materials: list[MaterialInfo]
+    section: SectionInfo
+    properties: Optional[SectionPropertiesPayload] = None
+    meta: Meta
+
+
 # ---------------------------------------------------------------------------
 # Input normalisation & caching
 # ---------------------------------------------------------------------------
@@ -243,6 +328,28 @@ def yaml_key(text: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
+def _load_normalised_yaml(normalised_yaml: str) -> dict:
+    """Write normalised YAML to a temp file and run ``io_yaml.load_yaml``.
+
+    ``load_yaml`` requires a filesystem path, so this wraps the temp-file
+    dance once and is shared by both the full-session builder
+    (:meth:`_Session.build`) and the lightweight :func:`inspect` parser.
+    """
+    from .io_yaml import load_yaml
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8",
+    ) as f:
+        f.write(normalised_yaml)
+        tmp = f.name
+    try:
+        return load_yaml(tmp)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 @lru_cache(maxsize=SECTION_CACHE_SIZE)
 def _get_session(key: str, normalised_yaml: str) -> "_Session":
     """Build or retrieve a cached :class:`_Session` for this YAML."""
@@ -263,6 +370,30 @@ def _session_for(
     session = _get_session(key, norm)
     cached = _get_session.cache_info().hits > hits_before
     return session, cached
+
+
+@lru_cache(maxsize=SECTION_CACHE_SIZE)
+def _get_parsed(key: str, normalised_yaml: str) -> dict:
+    """Cached lightweight parse for :func:`inspect` (no solver built)."""
+    return _load_normalised_yaml(normalised_yaml)
+
+
+def _parsed_for(
+    yaml_text: Optional[str], yaml_path: Optional[Union[str, Path]],
+) -> tuple[dict, bool]:
+    """Resolve inputs -> (parsed_data, cached_flag) without building a solver.
+
+    The cheap counterpart to :func:`_session_for`: it stops right after
+    :func:`gensec.io_yaml.load_yaml`, so :func:`inspect` never pays for
+    the fiber solver, the N-M diagram or the verification engine.
+    """
+    text = _load_yaml_text(yaml_text, yaml_path)
+    norm = _normalise_yaml(text)
+    key = hashlib.sha256(norm.encode("utf-8")).hexdigest()
+    hits_before = _get_parsed.cache_info().hits
+    data = _get_parsed(key, norm)
+    cached = _get_parsed.cache_info().hits > hits_before
+    return data, cached
 
 
 # ---------------------------------------------------------------------------
@@ -298,23 +429,10 @@ class _Session:
         memory.  Heavy: runs once per unique YAML.
         """
         # Local imports keep this module lightweight at import time.
-        from .io_yaml import load_yaml
         from .solver import FiberSolver, NMDiagram
         from .solver.check import VerificationEngine
 
-        # load_yaml wants a path.
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, encoding="utf-8",
-        ) as f:
-            f.write(normalised_yaml)
-            tmp = f.name
-        try:
-            data = load_yaml(tmp)
-        finally:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+        data = _load_normalised_yaml(normalised_yaml)
 
         section      = data["section"]
         demands      = data["demands"]
@@ -382,23 +500,99 @@ class _Session:
             ),
         )
 
-def get_nm_3d(self, n_angles: int = 36, n_points_per_angle: int = 50):
-    """Lazy: compute the 3D surface the first time it's asked."""
-    if self.domain.get("nm_3d") is None and self.domain.get("is_biaxial"):
-        self.domain["nm_3d"] = self.nmdiagram.generate_biaxial(
-            n_angles=n_angles,
-            n_points_per_angle=n_points_per_angle,
-        )
-    return self.domain.get("nm_3d")
+    # -- lazy 3D surface ----------------------------------------------------
+
+    def get_nm_3d(self, n_angles: int = 36, n_points_per_angle: int = 80):
+        """Lazy: compute the 3D resistance surface the first time it's asked.
+
+        Method of :class:`_Session` (it mutates ``self.domain``).  Returns
+        ``None`` for uniaxial sections, where no 3D hull is defined.
+        """
+        if self.domain.get("nm_3d") is None and self.domain.get("is_biaxial"):
+            self.domain["nm_3d"] = self.nmdiagram.generate_biaxial(
+                n_angles=n_angles,
+                n_points_per_angle=n_points_per_angle,
+            )
+        return self.domain.get("nm_3d")
+
 
 def clear_cache() -> None:
     """Evict every cached session.  Call after shutdown or in tests."""
     _get_session.cache_clear()
+    _get_parsed.cache_clear()
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def inspect(
+    yaml_text: Optional[str] = None,
+    yaml_path: Optional[Union[str, Path]] = None,
+    compute_plastic: bool = True,
+) -> InspectResult:
+    r"""Parse YAML and compute homogenized section properties only.
+
+    The cheap counterpart to :func:`analyze`: it builds the section and
+    its ideal (homogenized) properties but runs **no** fiber solver,
+    **no** resistance domain and **no** verification.  Intended for the
+    GUI's section-properties panel, refreshed live while the user edits
+    the geometry.  Typically well under 200 ms.
+
+    Parameters
+    ----------
+    yaml_text : str, optional
+        Raw YAML content.
+    yaml_path : str or Path, optional
+        Path to a YAML file on disk.  Provide exactly one of
+        ``yaml_text`` / ``yaml_path`` (same contract as :func:`analyze`).
+    compute_plastic : bool, default True
+        Also compute the plastic section moduli
+        :math:`Z_x, Z_y, Z_\xi, Z_\eta`.  Set ``False`` to skip the
+        plastic neutral-axis bisection when only elastic properties are
+        needed.
+
+    Returns
+    -------
+    InspectResult
+        Materials, section summary and homogenized properties.  If the
+        section uses more than one bulk material, ``properties`` is
+        ``None`` and the reason is reported in ``meta.warnings`` rather
+        than raising.
+
+    Examples
+    --------
+    >>> from gensec.api import inspect
+    >>> res = inspect(yaml_path="examples/rect_column.yaml")
+    >>> res.properties.area  # doctest: +SKIP
+    160000.0
+    """
+    t0 = time.perf_counter()
+    data, cached = _parsed_for(yaml_text, yaml_path)
+    section = data["section"]
+
+    warnings: list[str] = []
+    properties: Optional[SectionPropertiesPayload] = None
+    try:
+        props = section.compute_ideal_properties(
+            compute_plastic=compute_plastic
+        )
+        properties = _section_properties_payload(props)
+    except NotImplementedError as exc:
+        warnings.append(str(exc))
+
+    return InspectResult(
+        materials=[_material_info(mid, m)
+                   for mid, m in data["materials"].items()],
+        section=_section_info(section),
+        properties=properties,
+        meta=Meta(
+            elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            cached=cached,
+            warnings=warnings,
+        ),
+    )
+
 
 def analyze(
     yaml_text: Optional[str] = None,
@@ -432,30 +626,55 @@ def contour_at_N(
     N_kN: float,
     yaml_text: Optional[str] = None,
     yaml_path: Optional[Union[str, Path]] = None,
-    n_angles: int = 144,
+    n_angles: int = 72,
     n_points_per_angle: int = 200,
 ) -> ContourResponse:
     """Return a single Mx-My interaction contour at a fixed axial force.
 
-    Fast path used by the N-slider in the GUI.  Reuses the cached
-    section/hull; only the slice is recomputed.
+    Fast path used by the N-slider in the GUI.  When the 3D
+    resistance surface has been computed (biaxial sections), the
+    contour is obtained by **slicing the cached hull** (~1 ms)
+    instead of re-running the full vectorised Newton solve
+    (~200 ms).  Falls back to :meth:`NMDiagram.generate_mx_my`
+    when no 3D surface is available.
 
     Parameters
     ----------
     N_kN : float
         Axial force [kN].  Sign: negative = compression.
-    n_angles : int, default 144
+    n_angles : int, default 72
     n_points_per_angle : int, default 200
+        Kept for API compatibility; only used in the fallback path.
     """
+    from .solver.capacity import NMDiagram
+
     t0 = time.perf_counter()
     session, cached = _session_for(yaml_text, yaml_path)
 
+    # ---- Fast path: slice the pre-computed 3D hull ----
+    nm_3d = session.get_nm_3d()
+    if nm_3d is not None:
+        sliced = NMDiagram.slice_mx_my_at_N(
+            nm_3d, float(N_kN), n_angles=n_angles,
+        )
+        if sliced is not None:
+            mx = _as_list(sliced.get("Mx_kNm", []))
+            my = _as_list(sliced.get("My_kNm", []))
+            return ContourResponse(
+                N_kN=float(N_kN),
+                points=list(zip(mx, my)),
+                meta=Meta(
+                    elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+                    cached=cached,
+                ),
+            )
+
+    # ---- Fallback: full vectorised Newton solve ----
     mx_my = session.nmdiagram.generate_mx_my(
         N_fixed=float(N_kN) * 1e3,
         n_angles=n_angles,
         n_points_per_angle=n_points_per_angle,
     )
-    # generate_mx_my returns dict with "Mx_kNm" / "My_kNm" arrays.
     mx = _as_list(mx_my.get("Mx_kNm", []))
     my = _as_list(mx_my.get("My_kNm", []))
     points = list(zip(mx, my))
@@ -539,7 +758,7 @@ def render_plot(
 
     from .output import (
         plot_nm_diagram, plot_mx_my_diagram, plot_moment_curvature,
-        plot_3d_surface, plot_polar_ductility, plot_section,
+        plot_3d_surface, plot_polar_ductility, plot_polar_ductility_refactored, plot_section,
     )
 
     t0 = time.perf_counter()
@@ -579,7 +798,7 @@ def render_plot(
             direction = kwargs.get("direction", "x")
             data = nm_gen.generate_moment_curvature(
                 N_fixed=N_kN * 1e3,
-                n_points=int(kwargs.get("n_points", 400)),
+                n_chi=int(kwargs.get("n_chi", 400)),
                 direction=direction,
             )
             fig = plot_moment_curvature(data)
@@ -587,7 +806,7 @@ def render_plot(
             if not dom["is_biaxial"]:
                 raise ValueError("Polar plot requires a biaxial section.")
             N_kN = float(kwargs.get("N_kN", 0.0))
-            fig = plot_polar_ductility(
+            fig = plot_polar_ductility_refactored(
                 nm_gen,
                 N_fixed=N_kN * 1e3,
                 n_angles=int(kwargs.get("n_angles", 144)),
@@ -692,6 +911,35 @@ def _section_info(section) -> SectionInfo:
         n_fibers_y=int(section.n_fibers_y),
         rebars=rebars,
     )
+
+
+def _finite_or_none(value):
+    """Float -> float if finite, else None; bools and others pass through.
+
+    Used to keep :class:`SectionPropertiesPayload` strictly JSON-valid:
+    ``NaN`` (skipped plastic moduli) and ``inf`` (zero extreme-fiber
+    distance) become ``null``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(value) else None
+    return value
+
+
+def _section_properties_payload(props) -> SectionPropertiesPayload:
+    """Map a :class:`~gensec.properties.SectionProperties` dataclass to the
+    public payload, sanitising non-finite floats to ``None``.
+
+    Dataclass fields absent from the payload schema are dropped silently,
+    so :class:`~gensec.properties.SectionProperties` may grow without
+    breaking serialisation.
+    """
+    from dataclasses import asdict
+    raw = asdict(props)
+    known = SectionPropertiesPayload.model_fields
+    clean = {k: _finite_or_none(v) for k, v in raw.items() if k in known}
+    return SectionPropertiesPayload(**clean)
 
 
 def _domain_payload(dom: dict) -> DomainPayload:

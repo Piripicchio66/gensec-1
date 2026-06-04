@@ -80,6 +80,14 @@ class AnalyzeRequest(BaseModel):
     yaml_text: str = Field(..., description="Full YAML input as a string.")
 
 
+class InspectRequest(BaseModel):
+    """Body for ``POST /api/inspect``."""
+    yaml_text: str = Field(..., description="Full YAML input as a string.")
+    compute_plastic: bool = Field(
+        True, description="Compute plastic section moduli Z_*.",
+    )
+
+
 class ContourRequest(BaseModel):
     """Body for ``POST /api/contour``."""
     yaml_text: str
@@ -176,6 +184,25 @@ def create_app(enable_cors: bool = False) -> FastAPI:
                 "misses": cache.misses,
             },
         }
+
+    @app.post("/api/inspect",
+              response_model=api.InspectResult, tags=["analysis"])
+    def inspect_endpoint(req: InspectRequest) -> api.InspectResult:
+        """Parse YAML and compute section properties only.
+
+        No solver / no verification.  Cost: typically < 200 ms.
+        See :func:`gensec.api.inspect` for the response shape.
+        """
+        try:
+            return api.inspect(
+                yaml_text=req.yaml_text,
+                compute_plastic=req.compute_plastic,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            log.exception("inspect failed")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/api/analyze",
               response_model=api.AnalysisResult, tags=["analysis"])

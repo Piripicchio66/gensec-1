@@ -31,11 +31,11 @@ Supports both rectangular and arbitrary polygon sections via the
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import PathPatch, Circle, Rectangle
+from matplotlib.patches import Circle, Rectangle
 from matplotlib.path import Path
 from matplotlib.colors import TwoSlopeNorm
 from scipy.spatial import ConvexHull
-
+from ._polydraw import draw_polygon
 
 # ==================================================================
 #  Section outline helper (used by all section-based plots)
@@ -43,10 +43,11 @@ from scipy.spatial import ConvexHull
 
 def _draw_polygon_outline(ax, sec, **kwargs):
     r"""
-    Draw the section outline as a matplotlib path patch.
+    Draw the section outline as a Matplotlib patch.
 
-    Correctly renders holes (interior rings) using compound paths.
-    Falls back to a rectangle if no ``polygon`` attribute exists.
+    Delegates hole-aware rendering to
+    :func:`gensec.output._polydraw.draw_polygon`. Falls back to a
+    rectangle if the section exposes no ``polygon`` attribute.
 
     Parameters
     ----------
@@ -56,49 +57,14 @@ def _draw_polygon_outline(ax, sec, **kwargs):
         Overrides for :class:`~matplotlib.patches.PathPatch`
         (``facecolor``, ``edgecolor``, ``linewidth``, …).
     """
+    defaults = dict(linewidth=2, edgecolor='black', facecolor='#E8E8E8')
+    defaults.update(kwargs)
+
     poly = getattr(sec, 'polygon', None)
-
     if poly is not None:
-        verts = []
-        codes = []
-
-        # Exterior ring — must be CCW for matplotlib even-odd fill.
-        # Shapely guarantees CCW for exteriors.
-        ext = np.array(poly.exterior.coords)
-        n_ext = len(ext)
-        verts.extend(ext.tolist())
-        codes.append(Path.MOVETO)
-        codes.extend([Path.LINETO] * (n_ext - 2))
-        codes.append(Path.CLOSEPOLY)
-
-        # Interior rings (holes) — must be CW (opposite to exterior)
-        # for the even-odd fill rule to carve them out.
-        for interior in poly.interiors:
-            ring = np.array(interior.coords)
-            # Ensure CW winding: if signed area > 0, ring is CCW → reverse
-            signed_area = np.sum(
-                ring[:-1, 0] * ring[1:, 1] - ring[1:, 0] * ring[:-1, 1]
-            ) / 2
-            if signed_area > 0:
-                ring = ring[::-1]
-            n_ring = len(ring)
-            verts.extend(ring.tolist())
-            codes.append(Path.MOVETO)
-            codes.extend([Path.LINETO] * (n_ring - 2))
-            codes.append(Path.CLOSEPOLY)
-
-        path = Path(verts, codes)
-        defaults = dict(linewidth=2, edgecolor='black',
-                        facecolor='#E8E8E8')
-        defaults.update(kwargs)
-        patch = PathPatch(path, **defaults)
-        ax.add_patch(patch)
+        draw_polygon(ax, poly, **defaults)
     else:
-        defaults = dict(linewidth=2, edgecolor='black',
-                        facecolor='#E8E8E8')
-        defaults.update(kwargs)
-        rect = Rectangle((0, 0), sec.B, sec.H, **defaults)
-        ax.add_patch(rect)
+        ax.add_patch(Rectangle((0, 0), sec.B, sec.H, **defaults))
 
 
 def _section_axis_limits(ax, sec):
@@ -552,10 +518,21 @@ def plot_mx_my_diagram(mx_my_data, demands=None, title=""):
     -------
     matplotlib.figure.Figure
     """
-    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
     Mx = mx_my_data["Mx_kNm"]
     My = mx_my_data["My_kNm"]
     N_fixed = mx_my_data.get("N_fixed_kN", 0)
+
+    if mx_my_data.get("degenerate") or np.all(np.isnan(Mx)):
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+        ax.text(0.5, 0.5,
+                f"Domain collapsed: $M_{{Rd}} \\approx 0$\n"
+                f"(axial limit, N = {N_fixed:.0f} kN)",
+                ha='center', va='center', transform=ax.transAxes,
+                fontsize=12)
+        ax.set_axis_off()
+        return fig
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
 
     pts = np.column_stack([Mx, My])
     try:
@@ -578,14 +555,11 @@ def plot_mx_my_diagram(mx_my_data, demands=None, title=""):
     ax.set_xlabel("Mx [kN·m]")
     ax.set_ylabel("My [kN·m]")
     ax.set_title(title or f"Mx-My interaction at N = {N_fixed:.0f} kN")
-    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08),
-              fontsize=9, ncol=3, borderaxespad=0)
+    ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
     ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     fig.tight_layout()
-    fig.subplots_adjust(bottom=0.15)
     return fig
-
 
 # ==================================================================
 #  Moment-curvature diagram
@@ -750,15 +724,23 @@ def plot_demand_heatmap(check_results, title=""):
         offsets = y_pos + (t_idx - (n_types - 1) / 2) * bar_height
         vals = []
         colors = []
+        hatches = []
         for r in sorted_res:
             v = r.get(key)
             v = v if v is not None else 0.0
             vals.append(v)
-            colors.append('#F44336' if v > 1.0 else '#4CAF50')
+            if v > 1.0:
+                colors.append('#F44336')
+                hatches.append('///')
+            else:
+                colors.append(base_color)
+                hatches.append('')
 
         bars = ax.barh(offsets, vals, height=bar_height * 0.9,
                        color=colors, edgecolor='black',
                        linewidth=0.4, label=label, alpha=0.85)
+        for bar, h in zip(bars, hatches):
+            bar.set_hatch(h)
 
         for i, (bar, v) in enumerate(zip(bars, vals)):
             if v > 0:
@@ -917,6 +899,48 @@ def _resample_contour(contour, n_angles, cx=None, cy=None):
     return np.column_stack([x_closed, y_closed])
 
 
+def _arc_length_resample(contour, n_samples):
+    r"""
+    Resample a closed convex contour by normalised cumulative arc length,
+    starting at the vertex of maximum :math:`M_x`.
+
+    Unlike angular resampling from a shared centroid, this requires no
+    common reference point, so meridians remain coherent even when
+    contours migrate in :math:`M_x` across N levels (T, L, or any
+    singly-symmetric section).  The start landmark (max-Mx vertex) traces
+    a physical ridge of the surface through N.
+
+    Parameters
+    ----------
+    contour : ndarray, shape ``(m, 2)``
+        Convex boundary points ordered along the loop. Columns are (Mx, My).
+    n_samples : int
+        Number of equispaced arc-length stations on :math:`s \in [0, 1)`.
+
+    Returns
+    -------
+    ndarray, shape ``(n_samples + 1, 2)``
+        Resampled boundary; first station repeated at end for a closed ring.
+    """
+    i0 = int(np.argmax(contour[:, 0]))
+    pts = np.roll(contour, -i0, axis=0)
+
+    closed = np.vstack([pts, pts[:1]])
+    seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    total = s[-1]
+    if total <= 0.0:
+        return np.tile(pts[0], (n_samples + 1, 1))
+    s_norm = s / total
+
+    targets = np.linspace(0.0, 1.0, n_samples, endpoint=False)
+    mx = np.interp(targets, s_norm, closed[:, 0])
+    my = np.interp(targets, s_norm, closed[:, 1])
+
+    return np.column_stack([np.append(mx, mx[0]),
+                            np.append(my, my[0])])
+
+
 def plot_3d_surface(nm_3d, demands=None, title="",
                     n_levels=20, n_angles=72):
     r"""
@@ -959,14 +983,18 @@ def plot_3d_surface(nm_3d, demands=None, title="",
 
     # ---- Build structured surface from hull contour slices ----
     hull = ConvexHull(pts)
-    N_levels = np.linspace(N_min * 0.98, N_max * 0.98, n_levels)
 
-    # First pass: collect raw contours and find the largest one
-    # to use its centroid as the common angular reference.
-    raw_contours = []
-    raw_N = []
-    max_area = 0.0
-    ref_cx, ref_cy = 0.0, 0.0
+    # Cosine-spaced N levels: denser toward the apices where the hull tapers.
+    # Drop the two degenerate endpoints (zero-area apex slices).
+    u = np.linspace(-1.0, 1.0, n_levels)
+    N_levels = (0.5 * (N_max + N_min)
+                + 0.5 * (N_max - N_min) * np.sin(u * np.pi / 2.0))[1:-1]
+
+    # Single pass: arc-length resampling needs no shared centroid.
+    grid_Mx = []
+    grid_My = []
+    grid_N = []
+    valid_levels = []
 
     for nl in N_levels:
         contour = _hull_slice_at_N(pts, hull.simplices, nl)
@@ -976,23 +1004,7 @@ def plot_3d_surface(nm_3d, demands=None, title="",
         span_y = contour[:, 1].max() - contour[:, 1].min()
         if span_x < 1e-3 and span_y < 1e-3:
             continue
-        raw_contours.append(contour)
-        raw_N.append(nl)
-        area = span_x * span_y
-        if area > max_area:
-            max_area = area
-            ref_cx = contour[:, 0].mean()
-            ref_cy = contour[:, 1].mean()
-
-    # Second pass: resample all contours with the common centroid.
-    grid_Mx = []
-    grid_My = []
-    grid_N = []
-    valid_levels = []
-
-    for contour, nl in zip(raw_contours, raw_N):
-        resampled = _resample_contour(contour, n_angles,
-                                      cx=ref_cx, cy=ref_cy)
+        resampled = _arc_length_resample(contour, n_angles)
         n_cols = resampled.shape[0]  # n_angles + 1 (closed loop)
         grid_Mx.append(resampled[:, 0])
         grid_My.append(resampled[:, 1])
@@ -1169,6 +1181,7 @@ def plot_moment_curvature_bundle(mc_list, direction='x', title=""):
 #  B) Polar ductility diagram — ultimate curvature vs direction
 # ==================================================================
 
+
 def plot_polar_ductility(nm_gen, N_fixed, n_angles=72,
                          n_points=400, title=""):
     r"""
@@ -1301,6 +1314,84 @@ def plot_polar_ductility(nm_gen, N_fixed, n_angles=72,
         pad=20)
     ax.set_rlabel_position(45)
 
+    fig.tight_layout()
+    return fig
+
+# ==================================================================
+#  Refactored plot_polar_ductility
+# ==================================================================
+
+def plot_polar_ductility_refactored(nm_gen, N_fixed, n_angles=72,
+                                    n_chi=100, title=""):
+    r"""
+    Polar diagram of ultimate curvature as a function of bending
+    direction.
+
+    Delegates the computation to
+    :meth:`NMDiagram.generate_polar_curvature` and handles only
+    rendering and outlier smoothing.
+
+    Parameters
+    ----------
+    nm_gen : NMDiagram
+        The diagram generator (wraps solver).
+    N_fixed : float
+        Axial force [N].
+    n_angles : int, optional
+        Angular resolution. Default 72.
+    n_chi : int, optional
+        Curvature steps per direction.  Default 100.
+    title : str, optional
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    polar = nm_gen.generate_polar_curvature(
+        N_fixed, n_angles=n_angles, n_chi=n_chi)
+
+    thetas = polar["thetas"]
+    chi_km = polar["chi_u_km"].copy()
+
+    # --- Outlier rejection and smoothing ---
+    # (Same algorithm as the original plot_polar_ductility)
+    if n_angles >= 8:
+        from scipy.ndimage import median_filter, uniform_filter1d
+        # Circular median filter (window=5)
+        chi_extended = np.concatenate(
+            [chi_km[-3:], chi_km, chi_km[:3]])
+        med = median_filter(chi_extended, size=5)[3:-3]
+        for k in range(len(chi_km)):
+            if med[k] > 0 and abs(chi_km[k] - med[k]) / med[k] > 0.5:
+                chi_km[k] = med[k]
+        chi_ext2 = np.concatenate([chi_km[-2:], chi_km, chi_km[:2]])
+        chi_km = uniform_filter1d(chi_ext2, size=3)[2:-2]
+
+    # Close the polar loop
+    thetas_closed = np.append(thetas, thetas[0])
+    chi_closed = np.append(chi_km, chi_km[0])
+
+    fig, ax = plt.subplots(
+        1, 1, figsize=(9, 9),
+        subplot_kw=dict(projection='polar'))
+
+    ax.plot(thetas_closed, chi_closed, 'b-', lw=2)
+    ax.fill(thetas_closed, chi_closed, alpha=0.15, color='blue')
+
+    ax.set_thetagrids(
+        [0, 90, 180, 270],
+        labels=['\u03c7x+ (Mx+)', '\u03c7y+ (My+)',
+                '\u03c7x\u2212 (Mx\u2212)',
+                '\u03c7y\u2212 (My\u2212)'])
+
+    ax.set_title(
+        title or
+        f"Ultimate curvature \u03c7_u [1/km] at "
+        f"N={N_fixed/1e3:.0f} kN",
+        pad=20)
+    ax.set_rlabel_position(45)
     fig.tight_layout()
     return fig
 
