@@ -124,6 +124,29 @@ class GenericSection:
         ``mesh_size``).
     n_grid_y : int or None, optional
         Explicit number of grid rows.  Default ``None``.
+    bulk_eps_init : float, optional
+        Uniform locked-in pre-strain of the bulk material [-], tension
+        positive (e.g. an imposed shrinkage/thermal field).  Default
+        ``0.0``.  This is the bulk counterpart of a tendon's
+        ``eps_pe``: a *resistance*-side imposed-strain offset (it
+        belongs to the capacity hash, not to the demand path).  It is
+        carried by :class:`~gensec.solver.section_state.SectionState`
+        and quantized into
+        :meth:`~gensec.solver.section_state.SectionState.capacity_hash`.
+
+        .. note::
+           As of this phase the value is parsed, stored, hashed and
+           propagated to every materialized view, but the integrator
+           does **not yet** evaluate the bulk constitutive law at the
+           offset argument :math:`\varepsilon_{\text{sec}} +
+           \varepsilon_{b,0}`.  A non-zero ``bulk_eps_init`` therefore
+           shifts the domain *identity* (cache key) without yet shifting
+           the domain *geometry*.  Wiring the offset into
+           :meth:`~gensec.solver.integrator.FiberSolver.strain_field`
+           and the displaced-bulk subtractions is a deliberate,
+           separately-validated kernel change (losses/creep phase); see
+           the deliverable note.  Sections that never set this field are
+           unaffected.
 
     Attributes
     ----------
@@ -174,6 +197,7 @@ class GenericSection:
     n_grid_x: Optional[int] = None
     n_grid_y: Optional[int] = None
     tendons: List["Tendon"] = field(default_factory=list)
+    bulk_eps_init: float = 0.0
 
     def __post_init__(self):
         # ---- Validate polygon ----
@@ -611,11 +635,16 @@ class GenericSection:
         """
         return self._bounds
 
-    ### TODO: we should add support for multi-staged sections,
-    ### where the ideal_gross properties are dependent from the time
-    ### of construction or load application. At the moment, the property
-    ### is computed lazily and cached, but it assumes a immutable section. 
-    ### If the section geometry or materials change, the cache should be invalidated.
+    # ``GenericSection`` is immutable by contract: the bulk mesh and the
+    # element set are fixed for the object's lifetime, so the lazily
+    # cached homogenized properties below are valid for as long as the
+    # object exists.  Section-state evolution (staged construction,
+    # prestress losses, de-stressing) is handled *without* mutating the
+    # base section: ``gensec.solver.section_state.materialize_view``
+    # produces a shallow copy per state with the point-element arrays
+    # re-sliced and ``eps_init`` overridden, and sets that copy's
+    # ``_ideal_gross_props_cache`` to ``None`` so it recomputes for the
+    # state.  The base section's cache is therefore never stale.
     @property
     def ideal_gross_properties(self):
         """Lazy, cached homogenized section properties (elastic only).
