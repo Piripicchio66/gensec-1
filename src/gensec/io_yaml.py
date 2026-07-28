@@ -95,6 +95,10 @@ from .geometry.section import RectSection
 from .geometry.geometry import GenericSection
 from .geometry import primitives as prim
 from .solver.section_state import PrestressAction
+from .solver.losses import LossModel
+from .materials.rheology import (
+    EC2RheologicalModel, TabulatedRheologicalModel,
+)
 from .materials.ec2_bridge import (
     concrete_from_class, concrete_from_ec2,
     prestress_from_ec2, prestress_from_class,
@@ -349,9 +353,26 @@ def load_yaml(filepath):
         # ---- New generic mode ----
         polygon = _build_polygon(sec_spec)
 
-        # Optional multi-material zones
+        # Optional multi-material zones.  Key validation is
+        # strict: an unknown key (a typo) must raise, never be
+        # silently ignored — it would change the model without
+        # telling (fail-loud policy, Phase-8 gap closure).
         bulk_materials = []
-        for zone_spec in sec_spec.get("material_zones", []):
+        _zone_keys = ("shape", "params", "material", "name")
+        for iz, zone_spec in enumerate(
+                sec_spec.get("material_zones", [])):
+            unknown = sorted(set(zone_spec) - set(_zone_keys))
+            if unknown:
+                raise ValueError(
+                    f"section.material_zones[{iz}]: unknown key(s) "
+                    f"{unknown}. Valid: {list(_zone_keys)}."
+                )
+            for req in ("shape", "material"):
+                if req not in zone_spec:
+                    raise ValueError(
+                        f"section.material_zones[{iz}]: missing "
+                        f"required key '{req}'."
+                    )
             zone_poly = _SHAPE_FACTORIES[
                 zone_spec["shape"].lower()](zone_spec.get("params", {}))
             zone_mat_name = zone_spec["material"]
@@ -359,7 +380,13 @@ def load_yaml(filepath):
                 raise ValueError(
                     f"Zone material '{zone_mat_name}' not found."
                 )
-            bulk_materials.append((zone_poly, materials[zone_mat_name]))
+            # 3-tuple (Polygon, Material, name).  name=None gets the
+            # positional auto-name zone_<k> at section construction
+            # (GenericSection._normalize_bulk_zones), which also
+            # enforces uniqueness and the reserved/numeric-name rules.
+            bulk_materials.append((zone_poly,
+                                   materials[zone_mat_name],
+                                   zone_spec.get("name")))
 
         section = GenericSection(
             polygon=polygon,
@@ -418,6 +445,17 @@ def load_yaml(filepath):
     # ---- Output options (with v2.1 flag defaults) ----
     output_opts = _parse_output_flags(data.get("output", {}))
 
+    # Phase-8 Task-2: the single construction timeline (G-D1).
+    # Carried raw (a list of single-key event mappings) for
+    # gensec.solver.timeline.ConstructionTimeline.from_block. Absent
+    # -> None and the whole timeline machinery is inert (the run is
+    # byte-identical to the pre-Task-2 behaviour).
+    construction_history = data.get("construction_history")
+
+    # Phase-5 / C5: the rheological loss models an ``interval`` may
+    # reference.  Absent -> {} and the whole machinery is inert.
+    losses_models = _parse_losses_models(data.get("losses_models"))
+
     return {
         "materials": materials,
         "section": section,
@@ -425,7 +463,111 @@ def load_yaml(filepath):
         "combinations": combinations,
         "envelopes": envelopes,
         "output_options": output_opts,
+        "construction_history": construction_history,
+        "losses_models": losses_models,
     }
+
+
+#: Provider constructors reachable from a YAML ``losses_models`` block.
+#: A norm enters GenSec by adding one line here and one class in
+#: :mod:`gensec.materials.rheology` -- nothing in the container moves.
+_RHEO_PROVIDERS = {
+    "ec2": EC2RheologicalModel,
+    "ntc": EC2RheologicalModel,      # NTC 2018 adopts the EC2 formulae
+    "tabulated": TabulatedRheologicalModel,
+}
+# 'aci' is deliberately absent.  A rheology is declarable only for a norm
+# GenSec can actually design to, and there is no ACI material -- no bridge,
+# no partial factors, no limit states.  The ACI provider exists, as a
+# falsification fixture, in aci209_falsification.py, outside the package.
+#: Keys of a ``losses_models`` entry that belong to the **container**
+#: (:class:`~gensec.solver.losses.LossModel`), not to the provider.
+_LOSS_CONTAINER_KEYS = ("provider", "chi", "relaxation_reduction",
+                        "n_steps", "steps")
+
+
+def _parse_losses_models(block):
+    r"""
+    Parse the top-level ``losses_models`` block into
+    :class:`~gensec.solver.losses.LossModel` objects (Phase 5 / C5).
+
+    ::
+
+        losses_models:
+          rheo_precast:
+            provider: ec2               # | ntc | tabulated
+            fck: 45                     # -> the provider's constructor
+            cement_class: R
+            RH: 70
+            chi: lump                   # -> the container: lump | from_J | float
+            relaxation_reduction: 0.8   # -> the container
+            steps: [1, 7, 30, 365]      # -> the container (opt-in)
+
+    Every key that is **not** a container knob is forwarded verbatim to
+    the provider's constructor, so a new norm needs no change here beyond
+    an entry in :data:`_RHEO_PROVIDERS` — the split between *mechanics*
+    (container) and *normative content* (provider) is enforced by the
+    parser itself.
+
+    The drying geometry :math:`(A_c, u)` is deliberately **not** a YAML
+    key: the container binds it per concrete zone from the section's own
+    polygons, because in a composite section every zone has its own
+    exposed perimeter.  A provider constructed with an explicit ``A_c``
+    and ``u`` keeps them (an engineer overriding the exposed perimeter of
+    a topping cast onto a web).
+
+    Parameters
+    ----------
+    block : dict or None
+        The raw ``losses_models`` mapping.
+
+    Returns
+    -------
+    dict
+        ``{name: LossModel}``.  Empty when the block is absent, in which
+        case the whole rheology machinery is inert and the run is
+        byte-identical to the pre-C5 behaviour.
+
+    Raises
+    ------
+    ValueError
+        Malformed block; unknown provider; a provider constructor that
+        rejects its arguments (re-raised with the model's name attached).
+    """
+    if not block:
+        return {}
+    if not isinstance(block, dict):
+        raise ValueError(
+            f"'losses_models' must be a mapping {{name: spec}}, got "
+            f"{type(block).__name__}."
+        )
+    out = {}
+    for name, spec in block.items():
+        if not isinstance(spec, dict):
+            raise ValueError(
+                f"losses_models['{name}'] must be a mapping, got "
+                f"{type(spec).__name__}."
+            )
+        pname = str(spec.get("provider", "")).lower()
+        if pname not in _RHEO_PROVIDERS:
+            raise ValueError(
+                f"losses_models['{name}']: unknown provider "
+                f"{spec.get('provider')!r}. Valid: "
+                f"{sorted(set(_RHEO_PROVIDERS))}."
+            )
+        pkwargs = {k: v for k, v in spec.items()
+                   if k not in _LOSS_CONTAINER_KEYS}
+        try:
+            provider = _RHEO_PROVIDERS[pname](name=name, **pkwargs)
+        except TypeError as exc:
+            raise ValueError(
+                f"losses_models['{name}']: the '{pname}' provider does "
+                f"not accept these keys ({sorted(pkwargs)}) -- {exc}."
+            ) from exc
+        ckwargs = {k: spec[k] for k in _LOSS_CONTAINER_KEYS
+                   if k in spec and k != "provider"}
+        out[name] = LossModel(provider=provider, name=name, **ckwargs)
+    return out
 
 
 def _parse_rebars(sec_spec, materials):
@@ -489,9 +631,14 @@ def _parse_tendons(sec_spec, materials):
             material: ps_1
             Ap: 1400
             eps_pe: 0.0065
-            system: post
             bonded: true
             name: T_bottom     # optional; usable as prestress_actions ref
+            # parent: <zone>   # staging-parent override; legal only
+            #                  # with embedded: false (Phase 8)
+
+    The retired ``system`` key ('pre'/'post') raises with a migration
+    message: the construction system is derived from the staging
+    timeline, never declared per tendon.
 
     Parameters
     ----------
@@ -506,6 +653,15 @@ def _parse_tendons(sec_spec, materials):
     """
     tendons = []
     for t_spec in sec_spec.get("tendons", []):
+        if "system" in t_spec:
+            raise ValueError(
+                f"Tendon spec (y={t_spec.get('y')!r}, "
+                f"name={t_spec.get('name')!r}): the 'system' key is "
+                f"retired. Pre-/post-tensioning is derived from the "
+                f"staging timeline (ordering of stressing vs casting "
+                f"events), never declared per tendon — remove the "
+                f"key."
+            )
         mat_name = t_spec["material"]
         if mat_name not in materials:
             raise ValueError(
@@ -517,7 +673,7 @@ def _parse_tendons(sec_spec, materials):
             Ap=float(t_spec.get("Ap", 0)),
             eps_pe=float(t_spec.get("eps_pe", 0.0)),
             x=float(t_spec["x"]) if "x" in t_spec else None,
-            system=t_spec.get("system", "pre"),
+            parent=t_spec.get("parent"),
             bonded=bool(t_spec.get("bonded", True)),
             embedded=bool(t_spec.get("embedded", True)),
             n_strands=int(t_spec.get("n_strands", 1)),
@@ -623,9 +779,11 @@ def _parse_combination(c_spec):
       stage, consumed by
       :meth:`~gensec.solver.section_state.StagedDomainManager.resolve_stages`:
       ``activate`` / ``deactivate`` (lists of element references),
+      ``activate_bulk`` (``{zone_ref: {eps0, chi_x, chi_y}}`` — cast a
+      bulk zone with its mandatory locked-in datum plane; Phase 8),
       ``eps_override`` (``{element_ref: eps}``, prestrain override [-]),
-      ``bulk_eps`` (float [-]; **non-zero raises** — see
-      :func:`_parse_section_ops_spec`), ``release`` (bool, default
+      ``bulk_eps`` (float [-]; consumed by the integrator as of
+      Phase 5, see :func:`_parse_section_ops_spec`), ``release`` (bool, default
       ``True``; whether deactivations are force-released).  An element
       reference is a **union index** (integer position in the canonical
       ``rebars + tendons`` order of the section) or an element ``name``
@@ -662,7 +820,7 @@ def _parse_combination(c_spec):
     unresolved (``_section_ops_spec``) and resolved against the built
     section by :func:`_resolve_section_ops` in :func:`load_yaml`;
     value-level validation that needs no section (structure, unknown
-    keys, the ``bulk_eps`` guard, ``time`` monotonicity) happens here.
+    keys, ``time`` monotonicity) happens here.
 
     Parameters
     ----------
@@ -714,10 +872,19 @@ def _parse_combination(c_spec):
                     f"a stage of a staged combination, not on a simple "
                     f"(components-only) combination."
                 )
-        return {
+        combo = {
             "name": name,
             "components": _parse_component_list(c_spec["components"]),
         }
+        # Phase-8 Task-2: a components-based combination may anchor at
+        # a construction-timeline point. The anchor metadata is passed
+        # verbatim to the timeline compiler; its presence does not
+        # conflict with the components/stages exclusivity (the compiler
+        # emits the stages). Combinations without 'at' are unaffected.
+        for _tl_key in ("at", "history_factors", "gamma_P"):
+            if _tl_key in c_spec:
+                combo[_tl_key] = c_spec[_tl_key]
+        return combo
 
     # Staged.
     if "prestress_actions" in c_spec:
@@ -834,15 +1001,17 @@ def _parse_bulk_prestrain(sec_spec):
     ------
     ValueError
         If both ``prestrain`` and ``eps_init`` are present with
-        different values (ambiguous), **or if the value is non-zero**.
-        The latter is a deliberate *no-silent-no-op* guard: the field is
-        parsed, hashed and propagated by the section-state machinery,
-        but the fiber integrator does not yet evaluate the bulk
-        constitutive law at the offset argument, so a non-zero value
-        would change the domain cache identity **without changing the
-        resistance domain itself** — the worst kind of silent error for
-        an analysis tool.  The guard is removed when the kernel consumes
-        the offset (shrinkage/losses phase).
+        different values (they are aliases — set only one).
+
+    Notes
+    -----
+    A non-zero value is now **consumed** by the fiber integrator, which
+    evaluates the bulk constitutive law at ``eps_section + bulk_eps_init``
+    (batch, scalar and tangent sites), so the resistance domain reflects
+    the offset.  The earlier *no-silent-no-op* guard that rejected any
+    non-zero value — a stopgap for when the kernel ignored the offset —
+    has been retired; the kernel consumption is validated end-to-end by
+    ``run_bulk_prestrain_validation_new.py``.
     """
     has_p = "prestrain" in sec_spec
     has_e = "eps_init" in sec_spec
@@ -859,14 +1028,6 @@ def _parse_bulk_prestrain(sec_spec):
     else:
         return 0.0
 
-    if value != 0.0:
-        raise ValueError(
-            f"section: bulk 'prestrain'/'eps_init' = {value:g} is not "
-            f"yet consumed by the fiber solver — the resistance domain "
-            f"would NOT reflect it. To avoid a silent no-op, non-zero "
-            f"values are rejected until the solver-side support lands "
-            f"(shrinkage/losses phase). Remove the field for now."
-        )
     return value
 
 
@@ -1073,7 +1234,8 @@ def _resolve_single_prestress_action(spec, section, x_ref, y_ref,
 #: a typo and raises (no-silent policy: a misspelled op must never be
 #: silently dropped — it would change the model without telling).
 _SECTION_OPS_KEYS = ("activate", "deactivate", "eps_override",
-                     "bulk_eps", "release")
+                     "bulk_eps", "release", "activate_bulk",
+                     "deactivate_bulk", "bulk_plane_delta")
 
 
 def _parse_section_ops_spec(combo_name, stage_name, ops):
@@ -1081,7 +1243,7 @@ def _parse_section_ops_spec(combo_name, stage_name, ops):
     Value-level validation of one stage's ``section_ops`` block.
 
     Runs at parse time (no section needed): structure, unknown keys,
-    the ``bulk_eps`` no-silent-no-op guard, type checks.  Element
+    type checks.  Element
     references (union indices or names) are **not** resolved here —
     that needs the built section and happens in
     :func:`_resolve_section_ops`.
@@ -1103,21 +1265,18 @@ def _parse_section_ops_spec(combo_name, stage_name, ops):
     Raises
     ------
     ValueError
-        Malformed block, unknown key, or non-zero ``bulk_eps``.
+        Malformed block or unknown key.
 
     Notes
     -----
-    **``bulk_eps`` is hash-effective but kernel-inert until Phase 5**,
-    exactly like the section-level ``prestrain`` / ``eps_init`` field
-    (see :func:`_parse_bulk_prestrain`): the value is parsed, hashed and
-    propagated onto the materialized view, but the fiber integrator does
-    not yet evaluate the bulk constitutive law at the offset argument.
-    A non-zero value would therefore change the domain cache identity
-    **without changing the resistance domain itself** — the worst kind
-    of silent error for an analysis tool.  The same *no-silent-no-op*
-    policy applies: non-zero values are rejected until the kernel
-    consumes the offset (Phase 5, the five documented sites in
-    ``integrator.py``).
+    ``bulk_eps`` is parsed and returned verbatim.  As of Phase 5 the
+    fiber integrator **consumes** the offset (it evaluates the bulk
+    constitutive law at ``eps_section + bulk_eps_init`` at the batch,
+    scalar and tangent sites), so a non-zero value moves the resistance
+    domain, not only the cache identity — exactly like the section-level
+    ``prestrain`` / ``eps_init`` field (see :func:`_parse_bulk_prestrain`).
+    The earlier *no-silent-no-op* rejection has been retired; the kernel
+    consumption is validated by ``run_bulk_prestrain_validation_new.py``.
     """
     where = f"Combination '{combo_name}', stage '{stage_name}'"
     if not isinstance(ops, dict):
@@ -1161,17 +1320,55 @@ def _parse_section_ops_spec(combo_name, stage_name, ops):
             )
         out["release"] = val
     if "bulk_eps" in ops:
-        val = float(ops["bulk_eps"])
-        if val != 0.0:
+        out["bulk_eps"] = float(ops["bulk_eps"])
+    if "deactivate_bulk" in ops:
+        raise NotImplementedError(
+            f"{where}: bulk deactivation not yet supported. "
+            f"Demolition requires the released-stress resultant of a "
+            f"bulk region (the bulk analog of deactivation_actions) — "
+            f"deferred beyond the prestress arc."
+        )
+    if "activate_bulk" in ops:
+        val = ops["activate_bulk"]
+        # Casting event: activate a bulk zone with its mandatory
+        # locked-in datum plane (eps0, chi_x, chi_y).  The datum is
+        # mandatory-explicit at engine level: writing zeros is legal,
+        # omitting a component is not (a defaulted datum would be a
+        # silent reconciliation — the with_grouted failure mode).
+        if not isinstance(val, dict) or not val:
             raise ValueError(
-                f"{where}: section_ops 'bulk_eps' = {val:g} is not yet "
-                f"consumed by the fiber solver — the resistance domain "
-                f"would NOT reflect it. To avoid a silent no-op, "
-                f"non-zero values are rejected until the solver-side "
-                f"support lands (Phase 5: bulk prestrain kernel change "
-                f"in integrator.py). Remove the field for now."
+                f"{where}: section_ops 'activate_bulk' must be a "
+                f"non-empty mapping "
+                f"{{zone_ref: {{eps0, chi_x, chi_y}}}}, got {val!r}."
             )
-        out["bulk_eps"] = val
+        out_ab = {}
+        for zref, datum in val.items():
+            zwhere = f"{where}: activate_bulk[{zref!r}]"
+            if not isinstance(datum, dict):
+                raise ValueError(
+                    f"{zwhere}: datum must be a mapping with the "
+                    f"three keys eps0, chi_x, chi_y, got "
+                    f"{type(datum).__name__}."
+                )
+            unknown_d = sorted(set(datum)
+                               - {"eps0", "chi_x", "chi_y"})
+            if unknown_d:
+                raise ValueError(
+                    f"{zwhere}: unknown datum key(s) {unknown_d}. "
+                    f"Valid: ['eps0', 'chi_x', 'chi_y']."
+                )
+            missing = [kk for kk in ("eps0", "chi_x", "chi_y")
+                       if kk not in datum]
+            if missing:
+                raise ValueError(
+                    f"{zwhere}: missing datum key(s) {missing}. The "
+                    f"casting datum plane is mandatory-explicit at "
+                    f"engine level; write zeros explicitly if that "
+                    f"is the intent."
+                )
+            out_ab[zref] = {kk: float(datum[kk])
+                            for kk in ("eps0", "chi_x", "chi_y")}
+        out["activate_bulk"] = out_ab
     return out
 
 
@@ -1345,6 +1542,36 @@ def _resolve_section_ops(combinations, section):
                 ops["release"] = spec["release"]
             if "bulk_eps" in spec:
                 ops["bulk_eps"] = spec["bulk_eps"]
+            if "activate_bulk" in spec:
+                ab = {}
+                for zref, datum in spec["activate_bulk"].items():
+                    zwhere = f"{where}.activate_bulk"
+                    try:
+                        zi = section.zone_index(zref)
+                    except AttributeError:
+                        raise ValueError(
+                            f"{zwhere}: the section does not expose "
+                            f"bulk zones (no zone_index); "
+                            f"activate_bulk needs a GenericSection "
+                            f"with material_zones."
+                        ) from None
+                    except ValueError as exc:
+                        raise ValueError(f"{zwhere}: {exc}") from None
+                    if zi == 0:
+                        raise ValueError(
+                            f"{zwhere}: zone 0 ('base') is always "
+                            f"active and not activatable."
+                        )
+                    if zi in ab:
+                        raise ValueError(
+                            f"{zwhere}: zone {zref!r} resolves to "
+                            f"zone index {zi}, already targeted in "
+                            f"this stage (name/index double "
+                            f"reference)."
+                        )
+                    ab[zi] = (datum["eps0"], datum["chi_x"],
+                              datum["chi_y"])
+                ops["activate_bulk"] = ab
             stage["section_ops"] = ops
 
 

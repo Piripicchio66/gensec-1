@@ -131,6 +131,35 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
+    # A refusal is a result, not a crash.  ``NotImplementedError`` marks
+    # a scope boundary the library states in words (D2, D8, F-B) and
+    # ``ValueError`` a rejected input; neither deserves a stack trace
+    # with ``<frozen runpy>`` frames in it.  Anything else still raises,
+    # because an unexpected exception is a bug and hiding it would be
+    # the opposite of fail-loud.
+    try:
+        return _dispatch(args, argv, parser)
+    except NotImplementedError as exc:
+        print(f"\nERROR (outside GenSec's modelled scope): {exc}")
+        sys.exit(1)
+    except ValueError as exc:
+        print(f"\nERROR: {exc}")
+        sys.exit(1)
+
+
+def _dispatch(args, argv, parser):
+    r"""
+    Route a parsed command to its handler.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed arguments.
+    argv : list of str or None
+        Raw argument vector; the no-subcommand fallback re-reads it.
+    parser : argparse.ArgumentParser
+        Used by the same fallback to print help.
+    """
     if args.command == "run":
         _run(args)
     elif args.command == "plot":
@@ -190,6 +219,22 @@ def _run(args):
     demands = data["demands"]
     combinations = data.get("combinations", [])
     envelopes = data.get("envelopes", [])
+
+    # --- Construction-history pre-flight ------------------------------
+    # ``run_timeline`` is called at the far end of this function, after
+    # the N-M diagrams, the 3D resistance surface and a printed
+    # verification verdict.  A history the library must refuse would
+    # therefore be refused *after* the user has read a green banner —
+    # one that reports on the raw demands, not on the anchored
+    # combinations, which have not been evaluated at that point.
+    # ``validate`` is a syntactic walk with no solver in it: run it now.
+    if data.get("construction_history"):
+        from .solver.timeline import ConstructionTimeline
+        ConstructionTimeline.from_block(
+            data["construction_history"],
+            losses_models=data.get("losses_models")).validate(section)
+        print(f"  Construction history: "
+              f"{len(data['construction_history'])} events, pre-flight OK.")
 
     # Output flags (v2.1, with defaults applied by io_yaml).
     output_opts = data.get("output_options", {})
@@ -315,6 +360,34 @@ def _run(args):
         export_demand_results_json(
             demand_results,
             os.path.join(outdir, "demand_summary.json"))
+
+    # ==============================================================
+    #  Phase-8 Task-2: construction-timeline driver (single opt-in gate)
+    # ==============================================================
+    # When the model carries a construction_history, one timeline is
+    # built and resolved once; every combination that declares an
+    # 'at' anchor is compiled against it and verified per anchor
+    # point, the governing point being the transparent maximum (C2).
+    # Anchored combinations are removed from the legacy loop below.
+    # Without a timeline the call returns None and this block is inert
+    # (byte-identical to the pre-Task-2 run); an 'at' anchor with no
+    # timeline raises inside the driver (fail-loud).
+    from .solver.timeline_run import run_timeline
+    timeline_out = run_timeline(data, n_points=args.n_points,
+                                biaxial=(nm_3d is not None))
+    if timeline_out is not None:
+        print("\n  Construction timeline active: verifying anchored "
+              "combinations per point.")
+        for _cname, _gov in timeline_out["anchored"].items():
+            _status = "OK" if _gov["verified"] else "NOT VERIFIED"
+            print(f"    {_cname}: governing point "
+                  f"'{_gov['governing_point']}' "
+                  f"eta={_gov['eta_governing']} ({_status})")
+            for _pt, _r in _gov["per_point"].items():
+                print(f"        {_pt}: eta={_r.get('eta_governing')}")
+        _anchored_names = set(timeline_out["anchored"])
+        combinations = [c for c in combinations
+                        if c.get("name") not in _anchored_names]
 
     # --- 2. Combination verification ---
     combination_results = []
